@@ -21,9 +21,9 @@ venv/
 # Environment
 .env
 
-# Data (large files, not for git)
-data/
-models/
+# Data (large files, not for git) — root-level only
+/data/
+/models/
 *.duckdb
 *.duckdb.wal
 *.parquet

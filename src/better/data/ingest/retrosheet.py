@@ -1,0 +1,214 @@
+"""Retrosheet game log ingestion.
+
+Downloads and parses Retrosheet game logs into the `games` table.
+Source: https://www.retrosheet.org/gamelogs/
+"""
+
+from __future__ import annotations
+
+import io
+import zipfile
+from pathlib import Path
+
+import httpx
+import pandas as pd
+from tqdm import tqdm
+
+from better.config import settings
+from better.constants import RETROSHEET_TEAM_MAP
+from better.data.db import get_connection
+from better.utils.logging import get_logger
+
+log = get_logger(__name__)
+
+# Retrosheet game log column names (subset of ~170 fields we use)
+# Full spec: https://www.retrosheet.org/gamelogs/glfields.txt
+GAMELOG_COLUMNS = [
+    "date", "game_num", "day_of_week", "visiting_team", "visiting_league",
+    "visiting_game_num", "home_team", "home_league", "home_game_num",
+    "visiting_score", "home_score", "length_outs", "day_night", "completion",
+    "forfeit", "protest", "park_id", "attendance", "time_of_game",
+    "visiting_line_score", "home_line_score",
+    "visiting_ab", "visiting_h", "visiting_2b", "visiting_3b", "visiting_hr",
+    "visiting_rbi", "visiting_sh", "visiting_sf", "visiting_hbp",
+    "visiting_bb", "visiting_ibb", "visiting_so", "visiting_sb", "visiting_cs",
+    "visiting_gdp", "visiting_ci", "visiting_lob", "visiting_pitchers_used",
+    "visiting_individual_er", "visiting_team_er", "visiting_wp", "visiting_bk",
+    "visiting_po", "visiting_a", "visiting_e", "visiting_passed_balls",
+    "visiting_dp", "visiting_tp",
+    "home_ab", "home_h", "home_2b", "home_3b", "home_hr",
+    "home_rbi", "home_sh", "home_sf", "home_hbp",
+    "home_bb", "home_ibb", "home_so", "home_sb", "home_cs",
+    "home_gdp", "home_ci", "home_lob", "home_pitchers_used",
+    "home_individual_er", "home_team_er", "home_wp", "home_bk",
+    "home_po", "home_a", "home_e", "home_passed_balls",
+    "home_dp", "home_tp",
+    "hp_umpire_id", "hp_umpire_name",
+    "1b_umpire_id", "1b_umpire_name",
+    "2b_umpire_id", "2b_umpire_name",
+    "3b_umpire_id", "3b_umpire_name",
+    "lf_umpire_id", "lf_umpire_name",
+    "rf_umpire_id", "rf_umpire_name",
+    "visiting_manager_id", "visiting_manager_name",
+    "home_manager_id", "home_manager_name",
+    "winning_pitcher_id", "winning_pitcher_name",
+    "losing_pitcher_id", "losing_pitcher_name",
+    "save_pitcher_id", "save_pitcher_name",
+    "gw_rbi_batter_id", "gw_rbi_batter_name",
+    "visiting_starter_id", "visiting_starter_name",
+    "home_starter_id", "home_starter_name",
+    # Visiting lineup (9 batters x id+name+pos = 27 columns)
+    *[f"visiting_batter_{i}_{f}" for i in range(1, 10) for f in ("id", "name", "pos")],
+    # Home lineup (9 batters x id+name+pos = 27 columns)
+    *[f"home_batter_{i}_{f}" for i in range(1, 10) for f in ("id", "name", "pos")],
+    "additional_info", "acquisition_info",
+]
+
+BASE_URL = "https://www.retrosheet.org/gamelogs/gl{year}.zip"
+
+
+def _normalize_team(code: str) -> str:
+    """Map Retrosheet team code to standard abbreviation."""
+    return RETROSHEET_TEAM_MAP.get(code, code)
+
+
+def download_gamelog(year: int) -> pd.DataFrame:
+    """Download and parse a single year's Retrosheet game log.
+
+    Returns a DataFrame with standardized columns ready for insertion.
+    """
+    url = BASE_URL.format(year=year)
+    log.info("downloading_retrosheet", year=year, url=url)
+
+    response = httpx.get(url, follow_redirects=True, timeout=60)
+    response.raise_for_status()
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        # The zip contains a single file like GL2024.TXT
+        names = zf.namelist()
+        txt_file = [n for n in names if n.upper().endswith(".TXT")][0]
+        with zf.open(txt_file) as f:
+            # Retrosheet files are CSV with no header
+            num_cols = len(GAMELOG_COLUMNS)
+            raw = pd.read_csv(
+                f,
+                header=None,
+                encoding="latin-1",
+            )
+            # Trim or pad columns to match our expected schema
+            if raw.shape[1] >= num_cols:
+                raw = raw.iloc[:, :num_cols]
+            raw.columns = GAMELOG_COLUMNS[: raw.shape[1]]
+
+    log.info("parsed_retrosheet", year=year, games=len(raw))
+    return raw
+
+
+def transform_gamelog(raw: pd.DataFrame, year: int) -> pd.DataFrame:
+    """Transform raw Retrosheet data into our games table schema."""
+    df = pd.DataFrame()
+
+    # Parse date: format is YYYYMMDD
+    df["game_date"] = pd.to_datetime(raw["date"].astype(str), format="%Y%m%d")
+    df["season"] = year
+
+    # Team codes
+    df["home_team"] = raw["home_team"].map(_normalize_team)
+    df["away_team"] = raw["visiting_team"].map(_normalize_team)
+
+    # Scores
+    df["home_score"] = pd.to_numeric(raw["home_score"], errors="coerce").astype("Int64")
+    df["away_score"] = pd.to_numeric(raw["visiting_score"], errors="coerce").astype("Int64")
+    df["home_win"] = df["home_score"] > df["away_score"]
+
+    # Scores as runs scored/allowed
+    df["home_runs_scored"] = df["home_score"]
+    df["home_runs_allowed"] = df["away_score"]
+    df["away_runs_scored"] = df["away_score"]
+    df["away_runs_allowed"] = df["home_score"]
+
+    # Batting stats
+    df["home_hits"] = pd.to_numeric(raw.get("home_h", 0), errors="coerce").astype("Int64")
+    df["away_hits"] = pd.to_numeric(raw.get("visiting_h", 0), errors="coerce").astype("Int64")
+    df["home_errors"] = pd.to_numeric(raw.get("home_e", 0), errors="coerce").astype("Int64")
+    df["away_errors"] = pd.to_numeric(raw.get("visiting_e", 0), errors="coerce").astype("Int64")
+    df["home_walks"] = pd.to_numeric(raw.get("home_bb", 0), errors="coerce").astype("Int64")
+    df["away_walks"] = pd.to_numeric(raw.get("visiting_bb", 0), errors="coerce").astype("Int64")
+    df["home_strikeouts"] = pd.to_numeric(raw.get("home_so", 0), errors="coerce").astype("Int64")
+    df["away_strikeouts"] = pd.to_numeric(
+        raw.get("visiting_so", 0), errors="coerce"
+    ).astype("Int64")
+    df["home_home_runs"] = pd.to_numeric(raw.get("home_hr", 0), errors="coerce").astype("Int64")
+    df["away_home_runs"] = pd.to_numeric(
+        raw.get("visiting_hr", 0), errors="coerce"
+    ).astype("Int64")
+
+    # Starting pitchers
+    if "home_starter_id" in raw.columns:
+        df["home_sp_name"] = raw.get("home_starter_name", "")
+        df["away_sp_name"] = raw.get("visiting_starter_name", "")
+    else:
+        df["home_sp_name"] = ""
+        df["away_sp_name"] = ""
+
+    # Park and game info
+    df["park_id"] = raw.get("park_id", "")
+    df["attendance"] = pd.to_numeric(raw.get("attendance", 0), errors="coerce").astype("Int64")
+    df["game_duration_minutes"] = pd.to_numeric(
+        raw.get("time_of_game", 0), errors="coerce"
+    ).astype("Int64")
+    df["day_night"] = raw.get("day_night", "N")
+
+    # Innings played (length_outs / 3 per team, but reported as total outs)
+    length_outs = pd.to_numeric(raw.get("length_outs", 54), errors="coerce")
+    df["innings_played"] = (length_outs / 6).round().astype("Int64")  # rough approximation
+
+    df["is_postseason"] = False
+    df["data_source"] = "retrosheet"
+
+    # Generate a game_pk from date + teams (Retrosheet doesn't have MLB game_pk)
+    df["game_pk"] = (
+        df["game_date"].dt.strftime("%Y%m%d").astype(int) * 100
+        + raw.get("game_num", 0).astype(int)
+    )
+    # Make game_pk more unique by incorporating home team
+    df["game_pk"] = df["game_pk"] * 100 + df["home_team"].apply(
+        lambda t: hash(t) % 100
+    )
+
+    # Set missing SP IDs to None
+    df["home_sp_id"] = None
+    df["away_sp_id"] = None
+
+    return df
+
+
+def ingest_retrosheet(
+    start_year: int | None = None,
+    end_year: int | None = None,
+) -> int:
+    """Download and load Retrosheet game logs into DuckDB.
+
+    Returns the total number of games loaded.
+    """
+    start = start_year or settings.train_start_year
+    end = end_year or settings.train_end_year
+    conn = get_connection()
+    total = 0
+
+    for year in tqdm(range(start, end + 1), desc="Retrosheet"):
+        try:
+            raw = download_gamelog(year)
+            df = transform_gamelog(raw, year)
+
+            # Insert into DuckDB, replacing existing data for this season
+            conn.execute("DELETE FROM games WHERE season = ? AND data_source = 'retrosheet'", [year])
+            conn.execute("INSERT INTO games SELECT * FROM df")
+            total += len(df)
+            log.info("loaded_retrosheet", year=year, games=len(df))
+        except Exception as e:
+            log.error("retrosheet_failed", year=year, error=str(e))
+            continue
+
+    log.info("retrosheet_complete", total_games=total)
+    return total
