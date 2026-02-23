@@ -23,7 +23,7 @@ def create_all_tables() -> None:
 def _create_games_table() -> None:
     execute("""
         CREATE TABLE IF NOT EXISTS games (
-            game_pk INTEGER PRIMARY KEY,
+            game_pk BIGINT PRIMARY KEY,
             game_date DATE NOT NULL,
             season INTEGER NOT NULL,
             home_team VARCHAR(3) NOT NULL,
@@ -290,7 +290,7 @@ def _create_pitcher_features_table() -> None:
 def _create_predictions_table() -> None:
     execute("""
         CREATE TABLE IF NOT EXISTS predictions (
-            game_pk INTEGER PRIMARY KEY,
+            game_pk BIGINT PRIMARY KEY,
             game_date DATE,
             home_team VARCHAR(3),
             away_team VARCHAR(3),

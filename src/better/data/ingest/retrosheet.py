@@ -108,7 +108,7 @@ def transform_gamelog(raw: pd.DataFrame, year: int) -> pd.DataFrame:
     """Transform raw Retrosheet data into our games table schema."""
     df = pd.DataFrame()
 
-    # Parse date: format is YYYYMMDD
+    # Parse date: format is YYYYMMDD — DuckDB DATE column accepts pandas datetime64[ns]
     df["game_date"] = pd.to_datetime(raw["date"].astype(str), format="%Y%m%d")
     df["season"] = year
 
@@ -166,15 +166,11 @@ def transform_gamelog(raw: pd.DataFrame, year: int) -> pd.DataFrame:
     df["is_postseason"] = False
     df["data_source"] = "retrosheet"
 
-    # Generate a game_pk from date + teams (Retrosheet doesn't have MLB game_pk)
-    df["game_pk"] = (
-        df["game_date"].dt.strftime("%Y%m%d").astype(int) * 100
-        + raw.get("game_num", 0).astype(int)
-    )
-    # Make game_pk more unique by incorporating home team
-    df["game_pk"] = df["game_pk"] * 100 + df["home_team"].apply(
-        lambda t: hash(t) % 100
-    )
+    # Generate a game_pk: YYYYMMDD * 1000 + sequential row index within the day
+    # This guarantees uniqueness regardless of doubleheaders or same-day collisions
+    date_int = df["game_date"].dt.strftime("%Y%m%d").astype(int)
+    day_seq = df.groupby("game_date").cumcount()  # 0-based sequential within each date
+    df["game_pk"] = (date_int * 1000 + day_seq).astype("int64")
 
     # Set missing SP IDs to None
     df["home_sp_id"] = None
@@ -201,9 +197,10 @@ def ingest_retrosheet(
             raw = download_gamelog(year)
             df = transform_gamelog(raw, year)
 
-            # Insert into DuckDB, replacing existing data for this season
+            # Insert into DuckDB with explicit column names to avoid positional mismatch
             conn.execute("DELETE FROM games WHERE season = ? AND data_source = 'retrosheet'", [year])
-            conn.execute("INSERT INTO games SELECT * FROM df")
+            cols = ", ".join(df.columns.tolist())
+            conn.execute(f"INSERT INTO games ({cols}) SELECT {cols} FROM df")
             total += len(df)
             log.info("loaded_retrosheet", year=year, games=len(df))
         except Exception as e:

@@ -3,14 +3,14 @@ name = "better"
 version = "0.1.0"
 description = "MLB game prediction system with real-time win probability and betting optimization"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     # Data ingestion
     "duckdb>=1.1",
     "pandas>=2.1",
     "polars>=1.0",
     "pyarrow>=14.0",
-    "pybaseball>=2.3",
+    "pybaseball>=2.2.7",
     "MLB-StatsAPI>=1.7",
     "httpx>=0.27",
 
