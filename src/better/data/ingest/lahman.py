@@ -1,227 +1,226 @@
-"""Lahman Database ingestion.
+"""Team and player statistics ingestion via pybaseball (FanGraphs).
 
-Downloads and loads season-level team and player statistics.
-Source: https://github.com/chadwickbureau/baseballdatabank
+Uses pybaseball's FanGraphs scrapers for team and player stats.
+This gives us advanced metrics (wRC+, FIP, SIERA, Stuff+, WAR) directly
+without needing the Lahman CSV files, which have moved to an inaccessible location.
 """
 
 from __future__ import annotations
 
-import io
-
-import httpx
 import pandas as pd
 from tqdm import tqdm
 
 from better.config import settings
-from better.constants import RETROSHEET_TEAM_MAP
 from better.data.db import get_connection
 from better.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-# Lahman data is hosted on the Chadwick Bureau GitHub
-LAHMAN_BASE_URL = (
-    "https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core/"
-)
-
-LAHMAN_FILES = {
-    "teams": "Teams.csv",
-    "batting": "Batting.csv",
-    "pitching": "Pitching.csv",
-    "people": "People.csv",
-}
-
-
-def _download_csv(filename: str) -> pd.DataFrame:
-    """Download a CSV file from the Lahman GitHub repository."""
-    url = LAHMAN_BASE_URL + filename
-    log.info("downloading_lahman", file=filename, url=url)
-    response = httpx.get(url, follow_redirects=True, timeout=60)
-    response.raise_for_status()
-    return pd.read_csv(io.StringIO(response.text))
-
-
-def _normalize_team(team_id: str) -> str:
-    """Normalize Lahman team IDs to standard abbreviations."""
-    return RETROSHEET_TEAM_MAP.get(team_id, team_id)
-
 
 def ingest_teams(start_year: int | None = None, end_year: int | None = None) -> int:
-    """Load Lahman Teams table into team_batting and team_pitching."""
+    """Load FanGraphs team batting and pitching stats into DuckDB."""
+    from pybaseball import team_batting, team_pitching
+
     start = start_year or settings.train_start_year
     end = end_year or settings.train_end_year
     conn = get_connection()
 
-    raw = _download_csv(LAHMAN_FILES["teams"])
-    raw = raw[(raw["yearID"] >= start) & (raw["yearID"] <= end)]
+    all_batting: list[pd.DataFrame] = []
+    all_pitching: list[pd.DataFrame] = []
 
-    # Team batting
-    batting = pd.DataFrame()
-    batting["team"] = raw["teamIDBR"].map(_normalize_team)
-    batting["season"] = raw["yearID"]
-    batting["games"] = raw["G"]
-    batting["plate_appearances"] = raw.get("PA", raw["AB"] + raw["BB"] + raw.get("HBP", 0))
-    batting["at_bats"] = raw["AB"]
-    batting["hits"] = raw["H"]
-    batting["doubles"] = raw["2B"]
-    batting["triples"] = raw["3B"]
-    batting["home_runs"] = raw["HR"]
-    batting["runs"] = raw["R"]
-    batting["rbi"] = raw.get("RBI", 0)
-    batting["walks"] = raw["BB"]
-    batting["strikeouts"] = raw["SO"]
-    batting["stolen_bases"] = raw.get("SB", 0)
+    for year in tqdm(range(start, end + 1), desc="Team Stats"):
+        try:
+            tb = team_batting(year)
+            if tb is not None and not tb.empty:
+                tb = tb.copy()
+                tb["season"] = year
+                all_batting.append(tb)
+        except Exception as e:
+            log.warning("team_batting_failed", year=year, error=str(e))
 
-    # Compute rate stats
-    batting["batting_avg"] = (batting["hits"] / batting["at_bats"]).round(3)
-    batting["obp"] = (
-        (batting["hits"] + batting["walks"])
-        / batting["plate_appearances"]
-    ).round(3)
-    batting["slg"] = (
-        (batting["hits"] - batting["doubles"] - batting["triples"] - batting["home_runs"]
-         + 2 * batting["doubles"] + 3 * batting["triples"] + 4 * batting["home_runs"])
-        / batting["at_bats"]
-    ).round(3)
-    batting["ops"] = (batting["obp"] + batting["slg"]).round(3)
-    batting["iso"] = (batting["slg"] - batting["batting_avg"]).round(3)
-    batting["babip"] = None  # Requires more data to compute accurately
-    batting["woba"] = None  # Computed from FanGraphs data
-    batting["wrc_plus"] = None  # Computed from FanGraphs data
+        try:
+            tp = team_pitching(year)
+            if tp is not None and not tp.empty:
+                tp = tp.copy()
+                tp["season"] = year
+                all_pitching.append(tp)
+        except Exception as e:
+            log.warning("team_pitching_failed", year=year, error=str(e))
 
-    conn.execute("DELETE FROM team_batting WHERE season BETWEEN ? AND ?", [start, end])
-    conn.execute("INSERT INTO team_batting SELECT * FROM batting")
+    # --- Team batting ---
+    if all_batting:
+        raw_tb = pd.concat(all_batting, ignore_index=True)
+        batting = pd.DataFrame()
+        batting["team"] = raw_tb["Team"]
+        batting["season"] = raw_tb["season"].astype(int)
+        batting["games"] = pd.to_numeric(raw_tb.get("G"), errors="coerce").astype("Int64")
+        batting["plate_appearances"] = pd.to_numeric(raw_tb.get("PA"), errors="coerce").astype("Int64")
+        batting["at_bats"] = pd.to_numeric(raw_tb.get("AB"), errors="coerce").astype("Int64")
+        batting["hits"] = pd.to_numeric(raw_tb.get("H"), errors="coerce").astype("Int64")
+        batting["doubles"] = pd.to_numeric(raw_tb.get("2B"), errors="coerce").astype("Int64")
+        batting["triples"] = pd.to_numeric(raw_tb.get("3B"), errors="coerce").astype("Int64")
+        batting["home_runs"] = pd.to_numeric(raw_tb.get("HR"), errors="coerce").astype("Int64")
+        batting["runs"] = pd.to_numeric(raw_tb.get("R"), errors="coerce").astype("Int64")
+        batting["rbi"] = pd.to_numeric(raw_tb.get("RBI"), errors="coerce").astype("Int64")
+        batting["walks"] = pd.to_numeric(raw_tb.get("BB"), errors="coerce").astype("Int64")
+        batting["strikeouts"] = pd.to_numeric(raw_tb.get("SO"), errors="coerce").astype("Int64")
+        batting["stolen_bases"] = pd.to_numeric(raw_tb.get("SB"), errors="coerce").astype("Int64")
+        batting["batting_avg"] = pd.to_numeric(raw_tb.get("AVG"), errors="coerce").round(3)
+        batting["obp"] = pd.to_numeric(raw_tb.get("OBP"), errors="coerce").round(3)
+        batting["slg"] = pd.to_numeric(raw_tb.get("SLG"), errors="coerce").round(3)
+        batting["ops"] = pd.to_numeric(raw_tb.get("OPS"), errors="coerce").round(3)
+        batting["woba"] = pd.to_numeric(raw_tb.get("wOBA"), errors="coerce").round(3)
+        batting["wrc_plus"] = pd.to_numeric(raw_tb.get("wRC+"), errors="coerce").round(1)
+        batting["iso"] = pd.to_numeric(raw_tb.get("ISO"), errors="coerce").round(3)
+        batting["babip"] = pd.to_numeric(raw_tb.get("BABIP"), errors="coerce").round(3)
+        batting = batting.dropna(subset=["team", "season"])
+        conn.execute("DELETE FROM team_batting WHERE season BETWEEN ? AND ?", [start, end])
+        conn.execute("INSERT INTO team_batting SELECT * FROM batting")
+        log.info("team_batting_loaded", rows=len(batting))
 
-    # Team pitching
-    pitching = pd.DataFrame()
-    pitching["team"] = raw["teamIDBR"].map(_normalize_team)
-    pitching["season"] = raw["yearID"]
-    pitching["games"] = raw["G"]
-    pitching["innings_pitched"] = raw.get("IPouts", raw["G"] * 27) / 3  # IPouts to IP
-    pitching["era"] = raw.get("ERA", None)
-    pitching["fip"] = None  # Computed from FanGraphs
-    pitching["xfip"] = None
-    pitching["siera"] = None
-    pitching["whip"] = None
-    pitching["k_per_9"] = (raw["SOA"] / pitching["innings_pitched"] * 9).round(2) if "SOA" in raw.columns else None
-    pitching["bb_per_9"] = (raw["BBA"] / pitching["innings_pitched"] * 9).round(2) if "BBA" in raw.columns else None
-    pitching["hr_per_9"] = (raw["HRA"] / pitching["innings_pitched"] * 9).round(2) if "HRA" in raw.columns else None
-    pitching["k_pct"] = None
-    pitching["bb_pct"] = None
-    pitching["k_minus_bb_pct"] = None
-    pitching["avg_against"] = None
-    pitching["runs_allowed"] = raw["RA"]
-    pitching["earned_runs"] = raw["ER"]
+    # --- Team pitching ---
+    if all_pitching:
+        raw_tp = pd.concat(all_pitching, ignore_index=True)
+        pitching = pd.DataFrame()
+        pitching["team"] = raw_tp["Team"]
+        pitching["season"] = raw_tp["season"].astype(int)
+        pitching["games"] = pd.to_numeric(raw_tp.get("G"), errors="coerce").astype("Int64")
+        pitching["innings_pitched"] = pd.to_numeric(raw_tp.get("IP"), errors="coerce").round(1)
+        pitching["era"] = pd.to_numeric(raw_tp.get("ERA"), errors="coerce").round(2)
+        pitching["fip"] = pd.to_numeric(raw_tp.get("FIP"), errors="coerce").round(2)
+        pitching["xfip"] = pd.to_numeric(raw_tp.get("xFIP"), errors="coerce").round(2)
+        pitching["siera"] = pd.to_numeric(raw_tp.get("SIERA"), errors="coerce").round(2)
+        pitching["whip"] = pd.to_numeric(raw_tp.get("WHIP"), errors="coerce").round(3)
+        pitching["k_per_9"] = pd.to_numeric(raw_tp.get("K/9"), errors="coerce").round(2)
+        pitching["bb_per_9"] = pd.to_numeric(raw_tp.get("BB/9"), errors="coerce").round(2)
+        pitching["hr_per_9"] = pd.to_numeric(raw_tp.get("HR/9"), errors="coerce").round(2)
+        k_pct = pd.to_numeric(raw_tp.get("K%"), errors="coerce")
+        bb_pct = pd.to_numeric(raw_tp.get("BB%"), errors="coerce")
+        pitching["k_pct"] = k_pct.round(3)
+        pitching["bb_pct"] = bb_pct.round(3)
+        pitching["k_minus_bb_pct"] = (k_pct - bb_pct).round(3)
+        pitching["avg_against"] = pd.to_numeric(raw_tp.get("AVG"), errors="coerce").round(3)
+        pitching["runs_allowed"] = pd.to_numeric(raw_tp.get("R"), errors="coerce").astype("Int64")
+        pitching["earned_runs"] = pd.to_numeric(raw_tp.get("ER"), errors="coerce").astype("Int64")
+        pitching = pitching.dropna(subset=["team", "season"])
+        conn.execute("DELETE FROM team_pitching WHERE season BETWEEN ? AND ?", [start, end])
+        conn.execute("INSERT INTO team_pitching SELECT * FROM pitching")
+        log.info("team_pitching_loaded", rows=len(pitching))
 
-    conn.execute("DELETE FROM team_pitching WHERE season BETWEEN ? AND ?", [start, end])
-    conn.execute("INSERT INTO team_pitching SELECT * FROM pitching")
+    return len(all_batting) + len(all_pitching)
 
-    total = len(batting) + len(pitching)
-    log.info("lahman_teams_loaded", batting_rows=len(batting), pitching_rows=len(pitching))
+
+def ingest_player_pitching(start_year: int | None = None, end_year: int | None = None) -> int:
+    """Load FanGraphs individual pitcher stats into DuckDB."""
+    from pybaseball import pitching_stats
+
+    start = start_year or settings.train_start_year
+    end = end_year or settings.train_end_year
+    conn = get_connection()
+    total = 0
+
+    for year in tqdm(range(start, end + 1), desc="Pitcher Stats"):
+        try:
+            raw = pitching_stats(year, qual=10)
+            if raw is None or raw.empty:
+                continue
+
+            df = pd.DataFrame()
+            df["player_id"] = pd.to_numeric(raw.get("IDfg"), errors="coerce").astype("Int64")
+            df["season"] = year
+            df["team"] = raw.get("Team", "")
+            df["games"] = pd.to_numeric(raw.get("G"), errors="coerce").astype("Int64")
+            df["games_started"] = pd.to_numeric(raw.get("GS"), errors="coerce").astype("Int64")
+            df["innings_pitched"] = pd.to_numeric(raw.get("IP"), errors="coerce").round(1)
+            df["wins"] = pd.to_numeric(raw.get("W"), errors="coerce").astype("Int64")
+            df["losses"] = pd.to_numeric(raw.get("L"), errors="coerce").astype("Int64")
+            df["era"] = pd.to_numeric(raw.get("ERA"), errors="coerce").round(2)
+            df["fip"] = pd.to_numeric(raw.get("FIP"), errors="coerce").round(2)
+            df["xfip"] = pd.to_numeric(raw.get("xFIP"), errors="coerce").round(2)
+            df["siera"] = pd.to_numeric(raw.get("SIERA"), errors="coerce").round(2)
+            df["whip"] = pd.to_numeric(raw.get("WHIP"), errors="coerce").round(3)
+            df["k_per_9"] = pd.to_numeric(raw.get("K/9"), errors="coerce").round(2)
+            df["bb_per_9"] = pd.to_numeric(raw.get("BB/9"), errors="coerce").round(2)
+            k_pct = pd.to_numeric(raw.get("K%"), errors="coerce")
+            bb_pct = pd.to_numeric(raw.get("BB%"), errors="coerce")
+            df["k_pct"] = k_pct.round(3)
+            df["bb_pct"] = bb_pct.round(3)
+            df["k_minus_bb_pct"] = (k_pct - bb_pct).round(3)
+            df["war"] = pd.to_numeric(raw.get("WAR"), errors="coerce").round(1)
+            df["stuff_plus"] = pd.to_numeric(raw.get("Stuff+"), errors="coerce").round(1)
+            df["throws"] = None
+            gs = pd.to_numeric(raw.get("GS"), errors="coerce").fillna(0)
+            g = pd.to_numeric(raw.get("G"), errors="coerce").replace(0, 1).fillna(1)
+            df["is_starter"] = gs > (g * 0.5)
+            df = df.dropna(subset=["player_id"])
+
+            conn.execute("DELETE FROM player_pitching WHERE season = ?", [year])
+            conn.execute("INSERT INTO player_pitching SELECT * FROM df")
+            total += len(df)
+        except Exception as e:
+            log.warning("pitcher_stats_failed", year=year, error=str(e))
+
+    log.info("player_pitching_loaded", total=total)
     return total
 
 
 def ingest_player_batting(start_year: int | None = None, end_year: int | None = None) -> int:
-    """Load Lahman individual batting stats."""
+    """Load FanGraphs individual batter stats into DuckDB."""
+    from pybaseball import batting_stats
+
     start = start_year or settings.train_start_year
     end = end_year or settings.train_end_year
     conn = get_connection()
+    total = 0
 
-    raw = _download_csv(LAHMAN_FILES["batting"])
-    raw = raw[(raw["yearID"] >= start) & (raw["yearID"] <= end)]
+    for year in tqdm(range(start, end + 1), desc="Batter Stats"):
+        try:
+            raw = batting_stats(year, qual=50)
+            if raw is None or raw.empty:
+                continue
 
-    # Load People for handedness
-    people = _download_csv(LAHMAN_FILES["people"])
-    people_map = dict(zip(people["playerID"], people["bats"]))
+            df = pd.DataFrame()
+            df["player_id"] = pd.to_numeric(raw.get("IDfg"), errors="coerce").astype("Int64")
+            df["season"] = year
+            df["team"] = raw.get("Team", "")
+            df["games"] = pd.to_numeric(raw.get("G"), errors="coerce").astype("Int64")
+            df["plate_appearances"] = pd.to_numeric(raw.get("PA"), errors="coerce").astype("Int64")
+            df["at_bats"] = pd.to_numeric(raw.get("AB"), errors="coerce").astype("Int64")
+            df["hits"] = pd.to_numeric(raw.get("H"), errors="coerce").astype("Int64")
+            df["doubles"] = pd.to_numeric(raw.get("2B"), errors="coerce").astype("Int64")
+            df["triples"] = pd.to_numeric(raw.get("3B"), errors="coerce").astype("Int64")
+            df["home_runs"] = pd.to_numeric(raw.get("HR"), errors="coerce").astype("Int64")
+            df["runs"] = pd.to_numeric(raw.get("R"), errors="coerce").astype("Int64")
+            df["rbi"] = pd.to_numeric(raw.get("RBI"), errors="coerce").astype("Int64")
+            df["walks"] = pd.to_numeric(raw.get("BB"), errors="coerce").astype("Int64")
+            df["strikeouts"] = pd.to_numeric(raw.get("SO"), errors="coerce").astype("Int64")
+            df["batting_avg"] = pd.to_numeric(raw.get("AVG"), errors="coerce").round(3)
+            df["obp"] = pd.to_numeric(raw.get("OBP"), errors="coerce").round(3)
+            df["slg"] = pd.to_numeric(raw.get("SLG"), errors="coerce").round(3)
+            df["ops"] = pd.to_numeric(raw.get("OPS"), errors="coerce").round(3)
+            df["woba"] = pd.to_numeric(raw.get("wOBA"), errors="coerce").round(3)
+            df["wrc_plus"] = pd.to_numeric(raw.get("wRC+"), errors="coerce").round(1)
+            df["iso"] = pd.to_numeric(raw.get("ISO"), errors="coerce").round(3)
+            df["babip"] = pd.to_numeric(raw.get("BABIP"), errors="coerce").round(3)
+            df["war"] = pd.to_numeric(raw.get("WAR"), errors="coerce").round(1)
+            df["bats"] = None
+            df = df.dropna(subset=["player_id"])
 
-    df = pd.DataFrame()
-    df["player_id"] = raw["playerID"].apply(hash).astype(int) % (2**31)
-    df["season"] = raw["yearID"]
-    df["team"] = raw["teamID"].map(_normalize_team)
-    df["games"] = raw["G"]
-    df["plate_appearances"] = raw["AB"] + raw["BB"] + raw.get("HBP", 0) + raw.get("SF", 0)
-    df["at_bats"] = raw["AB"]
-    df["hits"] = raw["H"]
-    df["doubles"] = raw["2B"]
-    df["triples"] = raw["3B"]
-    df["home_runs"] = raw["HR"]
-    df["runs"] = raw["R"]
-    df["rbi"] = raw["RBI"]
-    df["walks"] = raw["BB"]
-    df["strikeouts"] = raw["SO"]
+            conn.execute("DELETE FROM player_batting WHERE season = ?", [year])
+            conn.execute("INSERT INTO player_batting SELECT * FROM df")
+            total += len(df)
+        except Exception as e:
+            log.warning("batter_stats_failed", year=year, error=str(e))
 
-    df["batting_avg"] = (df["hits"] / df["at_bats"].replace(0, 1)).round(3)
-    df["obp"] = (
-        (df["hits"] + df["walks"]) / df["plate_appearances"].replace(0, 1)
-    ).round(3)
-    df["slg"] = (
-        (df["hits"] - df["doubles"] - df["triples"] - df["home_runs"]
-         + 2 * df["doubles"] + 3 * df["triples"] + 4 * df["home_runs"])
-        / df["at_bats"].replace(0, 1)
-    ).round(3)
-    df["ops"] = (df["obp"] + df["slg"]).round(3)
-    df["woba"] = None
-    df["wrc_plus"] = None
-    df["iso"] = (df["slg"] - df["batting_avg"]).round(3)
-    df["babip"] = None
-    df["war"] = None
-    df["bats"] = raw["playerID"].map(people_map)
-
-    conn.execute("DELETE FROM player_batting WHERE season BETWEEN ? AND ?", [start, end])
-    conn.execute("INSERT INTO player_batting SELECT * FROM df")
-
-    log.info("lahman_batting_loaded", rows=len(df))
-    return len(df)
-
-
-def ingest_player_pitching(start_year: int | None = None, end_year: int | None = None) -> int:
-    """Load Lahman individual pitching stats."""
-    start = start_year or settings.train_start_year
-    end = end_year or settings.train_end_year
-    conn = get_connection()
-
-    raw = _download_csv(LAHMAN_FILES["pitching"])
-    raw = raw[(raw["yearID"] >= start) & (raw["yearID"] <= end)]
-
-    people = _download_csv(LAHMAN_FILES["people"])
-    people_throws = dict(zip(people["playerID"], people["throws"]))
-
-    df = pd.DataFrame()
-    df["player_id"] = raw["playerID"].apply(hash).astype(int) % (2**31)
-    df["season"] = raw["yearID"]
-    df["team"] = raw["teamID"].map(_normalize_team)
-    df["games"] = raw["G"]
-    df["games_started"] = raw["GS"]
-    df["innings_pitched"] = raw["IPouts"] / 3
-    df["wins"] = raw["W"]
-    df["losses"] = raw["L"]
-    df["era"] = raw["ERA"]
-    df["fip"] = None
-    df["xfip"] = None
-    df["siera"] = None
-    df["whip"] = ((raw["H"] + raw["BB"]) / df["innings_pitched"].replace(0, 1)).round(3)
-    df["k_per_9"] = (raw["SO"] / df["innings_pitched"].replace(0, 1) * 9).round(2)
-    df["bb_per_9"] = (raw["BB"] / df["innings_pitched"].replace(0, 1) * 9).round(2)
-    df["k_pct"] = None
-    df["bb_pct"] = None
-    df["k_minus_bb_pct"] = None
-    df["war"] = None
-    df["stuff_plus"] = None
-    df["throws"] = raw["playerID"].map(people_throws)
-    df["is_starter"] = raw["GS"] > raw["G"] * 0.5
-
-    conn.execute("DELETE FROM player_pitching WHERE season BETWEEN ? AND ?", [start, end])
-    conn.execute("INSERT INTO player_pitching SELECT * FROM df")
-
-    log.info("lahman_pitching_loaded", rows=len(df))
-    return len(df)
+    log.info("player_batting_loaded", total=total)
+    return total
 
 
 def ingest_lahman(start_year: int | None = None, end_year: int | None = None) -> int:
-    """Run all Lahman ingestion steps. Returns total rows loaded."""
+    """Run all team and player stats ingestion. Returns total rows loaded."""
     total = 0
     total += ingest_teams(start_year, end_year)
-    total += ingest_player_batting(start_year, end_year)
     total += ingest_player_pitching(start_year, end_year)
-    log.info("lahman_complete", total_rows=total)
+    total += ingest_player_batting(start_year, end_year)
+    log.info("stats_ingestion_complete", total_rows=total)
     return total
