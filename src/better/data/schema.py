@@ -55,7 +55,9 @@ def _create_games_table() -> None:
             away_home_runs INTEGER,
             innings_played INTEGER DEFAULT 9,
             is_postseason BOOLEAN DEFAULT FALSE,
-            data_source VARCHAR(20) DEFAULT 'retrosheet'
+            data_source VARCHAR(20) DEFAULT 'retrosheet',
+            home_sp_retrosheet_id VARCHAR(10),
+            away_sp_retrosheet_id VARCHAR(10)
         )
     """)
 

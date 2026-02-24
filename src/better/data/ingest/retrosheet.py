@@ -172,9 +172,17 @@ def transform_gamelog(raw: pd.DataFrame, year: int) -> pd.DataFrame:
     day_seq = df.groupby("game_date").cumcount()  # 0-based sequential within each date
     df["game_pk"] = (date_int * 1000 + day_seq).astype("int64")
 
-    # Set missing SP IDs to None
+    # Starting pitcher IDs — store Retrosheet string IDs for later resolution
     df["home_sp_id"] = None
     df["away_sp_id"] = None
+    if "home_starter_id" in raw.columns:
+        df["home_sp_retrosheet_id"] = raw["home_starter_id"].astype(str).str.strip()
+    else:
+        df["home_sp_retrosheet_id"] = None
+    if "visiting_starter_id" in raw.columns:
+        df["away_sp_retrosheet_id"] = raw["visiting_starter_id"].astype(str).str.strip()
+    else:
+        df["away_sp_retrosheet_id"] = None
 
     return df
 
@@ -207,5 +215,46 @@ def ingest_retrosheet(
             log.error("retrosheet_failed", year=year, error=str(e))
             continue
 
+    # Resolve Retrosheet starter IDs → integer player IDs via player_ids table
+    if total > 0:
+        _resolve_starter_ids(conn)
+
     log.info("retrosheet_complete", total_games=total)
     return total
+
+
+def _resolve_starter_ids(conn) -> None:
+    """Backfill home_sp_id and away_sp_id from Retrosheet starter string IDs."""
+    updated_home = conn.execute("""
+        UPDATE games SET home_sp_id = p.player_id
+        FROM player_ids p
+        WHERE games.home_sp_retrosheet_id = p.retrosheet_id
+          AND games.home_sp_retrosheet_id IS NOT NULL
+          AND games.home_sp_retrosheet_id != ''
+          AND games.home_sp_id IS NULL
+    """).fetchone()
+
+    updated_away = conn.execute("""
+        UPDATE games SET away_sp_id = p.player_id
+        FROM player_ids p
+        WHERE games.away_sp_retrosheet_id = p.retrosheet_id
+          AND games.away_sp_retrosheet_id IS NOT NULL
+          AND games.away_sp_retrosheet_id != ''
+          AND games.away_sp_id IS NULL
+    """).fetchone()
+
+    # Log coverage
+    result = conn.execute("""
+        SELECT COUNT(*) as total,
+               COUNT(home_sp_id) as home_resolved,
+               COUNT(away_sp_id) as away_resolved
+        FROM games
+    """).fetchone()
+    log.info(
+        "starter_ids_resolved",
+        total_games=result[0],
+        home_sp_resolved=result[1],
+        away_sp_resolved=result[2],
+        home_pct=round(result[1] / result[0] * 100, 1) if result[0] > 0 else 0,
+        away_pct=round(result[2] / result[0] * 100, 1) if result[0] > 0 else 0,
+    )
