@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     kelly_fraction: float = 0.25
     max_bet_pct: float = 0.05
 
+    # Tuning
+    optuna_n_trials: int = 50
+    meta_include_raw_features: bool = True
+    mc_use_negative_binomial: bool = True
+    mc_nb_dispersion: float = 4.0
+
     @property
     def db_path_str(self) -> str:
         return str(self.duckdb_path)
