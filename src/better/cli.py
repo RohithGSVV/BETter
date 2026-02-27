@@ -5,6 +5,9 @@ Usage::
     uv run better features build
     uv run better features training-set
     uv run better features elo
+    uv run better model train [--skip-tuning] [--n-trials 50]
+    uv run better model evaluate
+    uv run better model predict NYY BOS
 """
 
 from __future__ import annotations
@@ -63,6 +66,64 @@ def features_elo(
         .head(top)
     )
     console.print(latest[["team", "as_of_date", "elo_rating"]].to_string(index=False))
+
+
+# ── Model commands ──────────────────────────────────────────────────────
+
+model_app = typer.Typer(help="Model training and prediction commands")
+app.add_typer(model_app, name="model")
+
+
+@model_app.command("train")
+def model_train(
+    skip_tuning: bool = typer.Option(False, help="Skip Optuna hyperparameter tuning"),
+    n_trials: int = typer.Option(50, help="Number of Optuna trials per model"),
+) -> None:
+    """Train all models (GBM ensemble, Bayesian, Monte Carlo, Meta-learner)."""
+    from better.training.orchestrator import run_full_training_pipeline
+
+    summary = run_full_training_pipeline(
+        skip_tuning=skip_tuning,
+        n_tuning_trials=n_trials,
+    )
+    console.print("\n[bold green]Training Complete[/bold green]")
+    console.print(summary.to_string(index=False))
+
+
+@model_app.command("evaluate")
+def model_evaluate() -> None:
+    """Show evaluation results from saved OOF predictions."""
+    from better.training.persistence import load_oof_predictions
+
+    oof_data = load_oof_predictions()
+    console.print(f"[green]Loaded OOF predictions for:[/green] {list(oof_data.keys())}")
+    for model_name, fold_preds in oof_data.items():
+        for year, preds in fold_preds.items():
+            console.print(f"  {model_name} fold {year}: {len(preds)} predictions")
+
+
+@model_app.command("predict")
+def model_predict(
+    home_team: str = typer.Argument(..., help="Home team abbreviation (e.g. NYY)"),
+    away_team: str = typer.Argument(..., help="Away team abbreviation (e.g. BOS)"),
+) -> None:
+    """Generate a prediction for a specific matchup using saved models."""
+    from better.models.bayesian.kalman import BayesianKalmanModel
+    from better.models.monte_carlo.simulator import MonteCarloSimulator
+    from better.training.persistence import load_model
+
+    console.print(f"[bold]{away_team} @ {home_team}[/bold]")
+
+    bayesian = BayesianKalmanModel()
+    load_model(bayesian)
+    p_bayesian = bayesian._predict_game(home_team, away_team)
+    console.print(f"  Bayesian Kalman:  P(home) = {p_bayesian:.3f}")
+
+    mc = MonteCarloSimulator()
+    load_model(mc)
+    home_exp = mc._expected_runs(home_team, away_team, home_team, True)
+    away_exp = mc._expected_runs(away_team, home_team, home_team, False)
+    console.print(f"  Monte Carlo:      Expected runs {home_team} {home_exp:.1f} - {away_team} {away_exp:.1f}")
 
 
 if __name__ == "__main__":

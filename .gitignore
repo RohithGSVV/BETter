@@ -23,10 +23,17 @@ venv/
 
 # Data (large files, not for git) — root-level only
 /data/
-/models/
 *.duckdb
 *.duckdb.wal
 *.parquet
+
+# Models — all committed (total 12MB, well within GitHub limits)
+# Largest individual file: ~1.7MB (xgboost_model.joblib)
+# All final models + per-fold checkpoints + OOF predictions tracked in git
+# so trained models can be loaded from any machine after git pull
+
+# CatBoost training artifacts
+catboost_info/
 
 # OS
 .DS_Store
