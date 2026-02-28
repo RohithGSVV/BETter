@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     mc_use_negative_binomial: bool = True
     mc_nb_dispersion: float = 4.0
 
+    # Betting
+    initial_bankroll: float = 1000.0
+    bet_strategy: str = "fractional_kelly"  # "flat", "kelly", "fractional_kelly"
+
     @property
     def db_path_str(self) -> str:
         return str(self.duckdb_path)

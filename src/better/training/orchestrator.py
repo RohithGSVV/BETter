@@ -13,6 +13,8 @@ Pipeline steps:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -161,7 +163,7 @@ def run_full_training_pipeline(
     results_dir = settings.project_root / "results"
     results_dir.mkdir(exist_ok=True)
 
-    # Per-fold detail (every model × every test year)
+    # Per-fold detail (every model x every test year)
     fold_detail = pd.DataFrame([
         {
             "model": r.model_name,
@@ -178,9 +180,49 @@ def run_full_training_pipeline(
     # Aggregate summary
     summary.to_csv(results_dir / "summary.csv", index=False)
 
+    # 9. OOF details — per-game predictions aligned with game metadata
+    #    Used by the backtester to simulate historical betting
+    _save_oof_details(all_oof_X, all_oof_y, all_oof_preds, meta_preds, results_dir)
+
     log.info(
         "training_complete",
         results_saved=str(results_dir),
         tuning=not skip_tuning,
     )
     return summary
+
+
+def _save_oof_details(
+    X_raw: pd.DataFrame,
+    y_true: np.ndarray,
+    base_preds: dict[str, np.ndarray],
+    meta_preds: np.ndarray,
+    results_dir: Path,
+) -> None:
+    """Save per-game OOF predictions with game metadata for backtesting.
+
+    Each row is a game the model was never trained on (out-of-fold).
+    Includes Elo-based probability as a synthetic market proxy.
+    """
+    from better.models import IDENTIFIER_COLS
+
+    oof = pd.DataFrame()
+
+    # Game metadata
+    for col in IDENTIFIER_COLS:
+        if col in X_raw.columns:
+            oof[col] = X_raw[col].values
+
+    oof["home_win"] = y_true
+
+    # Elo-based market proxy
+    if "elo_home_win_prob" in X_raw.columns:
+        oof["elo_home_win_prob"] = X_raw["elo_home_win_prob"].values
+
+    # Model predictions (all out-of-fold — leakage-free)
+    for name, preds in sorted(base_preds.items()):
+        oof[f"{name}_prob"] = preds
+    oof["meta_learner_prob"] = meta_preds
+
+    oof.to_csv(results_dir / "oof_details.csv", index=False)
+    log.info("oof_details_saved", rows=len(oof), path=str(results_dir / "oof_details.csv"))
