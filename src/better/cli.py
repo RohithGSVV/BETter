@@ -11,6 +11,8 @@ Usage::
     uv run better bet backtest [--edge-threshold 0.03] [--model meta_learner]
     uv run better bet sweep [--model meta_learner]
     uv run better bet edge [--model meta_learner]
+    uv run better api serve [--port 8000]
+    uv run better dashboard [--port 8501]
 """
 
 from __future__ import annotations
@@ -320,6 +322,48 @@ def bet_generate_oof() -> None:
     results_dir.mkdir(exist_ok=True)
     result.to_csv(results_dir / "oof_details.csv", index=False)
     console.print(f"[green]Saved {len(result)} rows to results/oof_details.csv[/green]")
+
+
+# ── API commands ──────────────────────────────────────────────────────
+
+api_app = typer.Typer(help="API server commands")
+app.add_typer(api_app, name="api")
+
+
+@api_app.command("serve")
+def api_serve(
+    host: str = typer.Option("127.0.0.1", help="Bind host"),
+    port: int = typer.Option(8000, help="Port"),
+    reload: bool = typer.Option(False, help="Auto-reload on file changes"),
+) -> None:
+    """Start the FastAPI prediction server."""
+    import uvicorn
+
+    console.print(f"\n[bold green]Starting BETter API server[/bold green]")
+    console.print(f"  Host: {host}:{port}")
+    console.print(f"  Docs: http://{host}:{port}/docs\n")
+
+    uvicorn.run(
+        "better.api.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
+# ── Dashboard command ──────────────────────────────────────────────────
+
+@app.command("dashboard")
+def dashboard_run(
+    port: int = typer.Option(8501, help="Dashboard port"),
+) -> None:
+    """Launch the NiceGUI dashboard."""
+    from better.dashboard.app import run
+
+    console.print(f"\n[bold green]Starting BETter Dashboard[/bold green]")
+    console.print(f"  URL: http://localhost:{port}\n")
+
+    run(port=port)
 
 
 if __name__ == "__main__":

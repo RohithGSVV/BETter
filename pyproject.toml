@@ -13,7 +13,6 @@ dependencies = [
     "pybaseball>=2.2.7",
     "MLB-StatsAPI>=1.7",
     "httpx>=0.27",
-
     # ML core
     "scikit-learn>=1.3",
     "xgboost>=2.0",
@@ -22,24 +21,19 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     "optuna>=3.4",
-
     # Deep learning (CPU for local inference; GPU training on Kaggle)
     "torch>=2.1",
-
     # Bayesian
     "statsmodels>=0.14",
-
     # API
     "fastapi>=0.110",
     "uvicorn>=0.25",
     "websockets>=12.0",
     "pydantic>=2.5",
     "pydantic-settings>=2.0",
-
     # Dashboard
     "streamlit>=1.40",
     "plotly>=5.18",
-
     # Utilities
     "structlog>=23.2",
     "python-dotenv>=1.0",
@@ -48,6 +42,7 @@ dependencies = [
     "tqdm>=4.66",
     "joblib>=1.3",
     "apscheduler>=3.10",
+    "nicegui>=3.8.0",
 ]
 
 [project.optional-dependencies]
