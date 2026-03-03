@@ -133,3 +133,15 @@ def american_to_decimal(odds: int) -> float:
         return 1 + odds / 100
     else:
         return 2.0
+
+
+def implied_prob_to_american(prob: float) -> int:
+    """Convert decimal win probability to American odds.
+
+    Inverse of implied_probability_from_american().
+    Favorites (prob >= 0.5) get negative odds, underdogs get positive.
+    """
+    prob = max(0.0001, min(0.9999, prob))
+    if prob >= 0.5:
+        return int(-(prob / (1 - prob)) * 100)
+    return int(((1 - prob) / prob) * 100)

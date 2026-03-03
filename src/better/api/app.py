@@ -9,6 +9,7 @@ Start with::
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,15 +21,37 @@ from better.api.routes.games import router as games_router
 from better.api.routes.health import router as health_router
 from better.api.routes.models import router as models_router
 from better.api.routes.predictions import router as predictions_router
+from better.config import settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load models on startup."""
+    """Load models on startup, start Kalshi feed if credentials are set."""
     from better.api.services import get_prediction_service
 
     get_prediction_service()  # Triggers model loading
+
+    # Start Kalshi WebSocket feed (no-op if credentials not configured)
+    kalshi_task = None
+    if settings.kalshi_email:
+        from better.data.live.kalshi_feed import start_kalshi_feed
+
+        feed = await start_kalshi_feed()
+        if feed is not None:
+            app.state.kalshi_feed = feed
+            kalshi_task = asyncio.create_task(feed.run())
+
     yield
+
+    # Shutdown: stop Kalshi feed gracefully
+    if kalshi_task is not None and not kalshi_task.done():
+        if hasattr(app.state, "kalshi_feed"):
+            app.state.kalshi_feed.stop()
+        kalshi_task.cancel()
+        try:
+            await kalshi_task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:

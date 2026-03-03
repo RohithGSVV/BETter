@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     odds_api_key: str = ""
     odds_api_base_url: str = "https://api.the-odds-api.com/v4"
 
+    # Kalshi prediction market
+    kalshi_api_base_url: str = "https://trading-api.kalshi.com/trade-api/v2"
+    kalshi_ws_url: str = "wss://trading-api.kalshi.com/trade-api/ws/v2"
+    kalshi_email: str = ""
+    kalshi_password: str = ""
+
     # MLB Stats API
     mlb_api_base_url: str = "https://statsapi.mlb.com/api/v1"
 
