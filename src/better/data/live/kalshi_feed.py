@@ -297,6 +297,7 @@ class KalshiWebSocketFeed:
     reconnect_delay: float = 5.0        # seconds before reconnect attempt
     heartbeat_interval: float = 30.0   # seconds between ping messages
 
+    on_odds_update: Any = field(default=None, init=False, repr=False)  # callback(game_pk, prob, source)
     _running: bool = field(default=False, init=False, repr=False)
     _cmd_id: int = field(default=0, init=False, repr=False)
 
@@ -466,6 +467,13 @@ class KalshiWebSocketFeed:
                 home_fair_prob=home_fair,
                 mid_cents=mid_cents,
             )
+
+            # Notify live manager for instant edge recalculation
+            if self.on_odds_update is not None:
+                try:
+                    self.on_odds_update(game_pk, home_fair, "kalshi")
+                except Exception as cb_exc:
+                    log.debug("kalshi_odds_callback_error", error=str(cb_exc))
         except Exception as exc:
             log.error("kalshi_store_failed", error=str(exc), ticker=market_ticker)
 

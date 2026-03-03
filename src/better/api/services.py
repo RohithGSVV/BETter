@@ -40,6 +40,9 @@ class PredictionService:
         self._cached_schedule: list[dict] | None = None
         self._cache_date: date | None = None
 
+        # Live game tracking
+        self._live_manager = None
+
     # ------------------------------------------------------------------
     # Model loading
     # ------------------------------------------------------------------
@@ -157,6 +160,19 @@ class PredictionService:
             "last_training_date": last_training_date,
             "model_details": details,
         }
+
+    # ------------------------------------------------------------------
+    # Live game manager
+    # ------------------------------------------------------------------
+
+    def get_live_manager(self):
+        """Get the LiveGameManager instance (created on first call)."""
+        if self._live_manager is None:
+            from better.data.live.manager import LiveGameManager
+
+            self._live_manager = LiveGameManager()
+            self._live_manager.load_model()
+        return self._live_manager
 
     # ------------------------------------------------------------------
     # Today's schedule

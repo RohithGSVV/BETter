@@ -114,6 +114,12 @@ def index():
     _build_page("games")
 
 
+@ui.page("/live")
+def live_page():
+    apply_theme()
+    _build_page("live")
+
+
 @ui.page("/backtest")
 def backtest_page():
     apply_theme()
@@ -158,6 +164,7 @@ def _build_page(active: str) -> None:
 
         nav_items = [
             ("Today's Games", "/", "sports_baseball", "games"),
+            ("Live Games", "/live", "live_tv", "live"),
             ("Backtest Results", "/backtest", "show_chart", "backtest"),
             ("Edge Analysis", "/edge", "insights", "edge"),
             ("Model Status", "/models", "hub", "models"),
@@ -191,6 +198,10 @@ def _build_page(active: str) -> None:
     with ui.column().classes("w-full p-6 gap-6"):
         if active == "games":
             from better.dashboard.pages.todays_games import render
+
+            render(get_service())
+        elif active == "live":
+            from better.dashboard.pages.live_games import render
 
             render(get_service())
         elif active == "backtest":
