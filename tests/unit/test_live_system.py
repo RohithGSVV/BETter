@@ -34,6 +34,14 @@ class TestPartialHalf:
     def test_two_outs(self):
         assert _partial_half(2) == pytest.approx(1 / 3)
 
+    def test_three_outs_clamped(self):
+        """outs=3 (from MLB API final games) should be clamped to outs=2."""
+        assert _partial_half(3) == pytest.approx(1 / 3)
+
+    def test_negative_outs_clamped(self):
+        """Negative outs should be clamped to 0."""
+        assert _partial_half(-1) == pytest.approx(1.0)
+
 
 class TestRunnerExpectedRuns:
     def test_bases_empty(self):
@@ -79,6 +87,18 @@ class TestComputeWinProb:
         assert 0.001 <= wp_high <= 0.999
         assert 0.001 <= wp_low <= 0.999
 
+    def test_outs_three_does_not_crash(self):
+        """outs=3 should not produce NaN or crash — should be clamped."""
+        wp = _compute_win_prob(9, "bot", 3, 0, 5, 0.50)
+        assert 0.001 <= wp <= 0.999
+        assert not np.isnan(wp)
+
+    def test_outs_three_tied_b9_reasonable(self):
+        """outs=3 tied B9 should give reasonable prob after clamping (not 25%)."""
+        wp = _compute_win_prob(9, "bot", 3, 0, 0, 0.50)
+        # After clamping to outs=2, tied B9 should still give home team decent chance
+        assert wp > 0.30  # was 0.25 before fix, now clamped to outs=2
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LiveWinProbModel
@@ -122,6 +142,14 @@ class TestLiveWinProbModel:
         assert model._get_we_weight(5) == 0.70
         assert model._get_we_weight(8) == 0.90
         assert model._get_we_weight(9) == 0.98
+
+    def test_predict_outs_three_fallback(self):
+        """outs=3 should still produce valid predictions via clamping."""
+        model = LiveWinProbModel()
+        state = self._make_state(inning=9, half="bot", outs=3, home_score=5, away_score=3)
+        result = model.predict(state)
+        assert 0 < result["win_prob"] < 1
+        assert not np.isnan(result["win_prob"])
 
     def test_predict_returns_all_keys(self):
         """Result dict should contain all expected keys."""
@@ -263,6 +291,100 @@ class TestLiveGameManager:
         manager.stop()
         assert manager._running is False
 
+    def test_on_state_change_final_home_wins(self):
+        """Final game where home wins should have win_prob=1.0 and status='final'."""
+        manager = LiveGameManager()
+        manager._game_info[12345] = {"home_team": "NYY", "away_team": "BOS"}
+        manager._pregame_probs[12345] = 0.55
+
+        state = GameState(
+            game_pk=12345, inning=9, half="bot", outs=2, runners=0,
+            home_score=5, away_score=3, status="final",
+        )
+        manager._on_state_change(12345, state)
+
+        snap = manager.get_snapshot(12345)
+        assert snap is not None
+        assert snap.status == "final"
+        assert snap.win_prob == 1.0
+        assert snap.we_prob == 1.0
+        assert snap.we_weight == 1.0
+
+    def test_on_state_change_final_away_wins(self):
+        """Final game where away wins should have win_prob=0.0."""
+        manager = LiveGameManager()
+        manager._game_info[12345] = {"home_team": "NYY", "away_team": "BOS"}
+
+        state = GameState(
+            game_pk=12345, inning=9, half="bot", outs=2, runners=0,
+            home_score=2, away_score=4, status="final",
+        )
+        manager._on_state_change(12345, state)
+
+        snap = manager.get_snapshot(12345)
+        assert snap.status == "final"
+        assert snap.win_prob == 0.0
+
+    def test_on_state_change_final_extra_innings(self):
+        """Final game in extra innings (12th inning)."""
+        manager = LiveGameManager()
+        manager._game_info[12345] = {"home_team": "NYY", "away_team": "BOS"}
+
+        state = GameState(
+            game_pk=12345, inning=12, half="bot", outs=2, runners=0,
+            home_score=3, away_score=2, status="final",
+        )
+        manager._on_state_change(12345, state)
+
+        snap = manager.get_snapshot(12345)
+        assert snap.status == "final"
+        assert snap.win_prob == 1.0
+
+    def test_on_state_change_final_walkoff(self):
+        """Walk-off win: home wins in bottom of 9th before 3 outs."""
+        manager = LiveGameManager()
+        manager._game_info[12345] = {"home_team": "NYY", "away_team": "BOS"}
+
+        state = GameState(
+            game_pk=12345, inning=9, half="bot", outs=1, runners=0,
+            home_score=4, away_score=3, status="final",
+        )
+        manager._on_state_change(12345, state)
+
+        snap = manager.get_snapshot(12345)
+        assert snap.status == "final"
+        assert snap.win_prob == 1.0
+
+    def test_on_state_change_final_away_wins_top_extras(self):
+        """Away team wins in top of extra inning."""
+        manager = LiveGameManager()
+        manager._game_info[12345] = {"home_team": "NYY", "away_team": "BOS"}
+
+        state = GameState(
+            game_pk=12345, inning=10, half="top", outs=2, runners=0,
+            home_score=2, away_score=5, status="final",
+        )
+        manager._on_state_change(12345, state)
+
+        snap = manager.get_snapshot(12345)
+        assert snap.status == "final"
+        assert snap.win_prob == 0.0
+
+    def test_on_state_change_final_with_market_edge(self):
+        """Final game should still compute edge against market."""
+        manager = LiveGameManager()
+        manager._game_info[12345] = {"home_team": "NYY", "away_team": "BOS"}
+        manager._market_probs[12345] = 0.60
+
+        state = GameState(
+            game_pk=12345, inning=9, half="bot", outs=2,
+            home_score=5, away_score=3, status="final",
+        )
+        manager._on_state_change(12345, state)
+
+        snap = manager.get_snapshot(12345)
+        assert snap.edge == pytest.approx(0.40, abs=0.001)  # 1.0 - 0.60
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GameState
@@ -285,6 +407,31 @@ class TestGameState:
         s3 = GameState(game_pk=1, inning=3, outs=1)
         assert s1.has_changed(s2) is True
         assert s1.has_changed(s3) is False
+
+    def test_default_status_is_live(self):
+        state = GameState(game_pk=1)
+        assert state.status == "live"
+
+    def test_status_final(self):
+        state = GameState(game_pk=1, status="final")
+        assert state.status == "final"
+
+    def test_has_changed_detects_status_change(self):
+        """Transition from live to final should count as changed."""
+        s1 = GameState(game_pk=1, inning=9, outs=2, status="live")
+        s2 = GameState(game_pk=1, inning=9, outs=2, status="final")
+        assert s1.has_changed(s2) is True
+
+    def test_has_changed_same_status(self):
+        s1 = GameState(game_pk=1, inning=5, outs=1, status="live")
+        s2 = GameState(game_pk=1, inning=5, outs=1, status="live")
+        assert s1.has_changed(s2) is False
+
+    def test_state_key_excludes_status(self):
+        """state_key should not include status — it's for WE lookup only."""
+        s1 = GameState(game_pk=1, inning=5, outs=1, status="live")
+        s2 = GameState(game_pk=1, inning=5, outs=1, status="final")
+        assert s1.state_key == s2.state_key
 
 
 # ─────────────────────────────────────────────────────────────────────────────

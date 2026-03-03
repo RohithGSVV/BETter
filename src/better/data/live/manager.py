@@ -200,20 +200,36 @@ class LiveGameManager:
         - Blend calculation: 2 multiplies + 1 add
         - Edge calculation: 1 subtract
         - Total: <1ms
-        """
-        pregame = self._pregame_probs.get(game_pk)
-        result = self._we_model.predict(state, pregame_prob=pregame)
 
+        For finished games (state.status == "final"), bypass the WE model
+        entirely and use the actual final score to determine win_prob.
+        """
         game_info = self._game_info.get(game_pk, {})
         market = self._market_probs.get(game_pk)
+        pregame = self._pregame_probs.get(game_pk)
 
-        # Check if game just ended
-        game_status = "final" if (
-            state.inning >= 9
-            and state.half == "bot"
-            and state.outs >= 3
-            and state.home_score != state.away_score
-        ) else "live"
+        if state.status == "final":
+            # Game is over — use actual score, not the WE model
+            if state.home_score > state.away_score:
+                win_prob = 1.0
+            elif state.away_score > state.home_score:
+                win_prob = 0.0
+            else:
+                win_prob = 0.5  # suspended/called with tie
+            result = {
+                "win_prob": win_prob,
+                "we_prob": win_prob,
+                "pregame_prob": round(pregame, 4) if pregame else None,
+                "we_weight": 1.0,
+                "inning": state.inning,
+                "half": state.half,
+                "outs": state.outs,
+                "runners": state.runners,
+                "home_score": state.home_score,
+                "away_score": state.away_score,
+            }
+        else:
+            result = self._we_model.predict(state, pregame_prob=pregame)
 
         snap = LiveGameSnapshot(
             game_pk=game_pk,
@@ -233,7 +249,7 @@ class LiveGameManager:
             market_prob=market,
             edge=round(result["win_prob"] - market, 4) if market else None,
             market_source="kalshi" if market else "",
-            status=game_status,
+            status=state.status,
         )
 
         self._snapshots[game_pk] = snap
@@ -248,6 +264,7 @@ class LiveGameManager:
             score=f"{state.away_score}-{state.home_score}",
             win_prob=result["win_prob"],
             edge=snap.edge,
+            status=state.status,
         )
 
     def stop(self) -> None:

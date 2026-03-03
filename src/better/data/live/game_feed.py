@@ -34,6 +34,7 @@ class GameState:
     current_batter_id: int | None = None
     balls: int = 0
     strikes: int = 0
+    status: str = "live"  # "live", "final", "delayed"
 
     @property
     def score_diff(self) -> int:
@@ -42,12 +43,12 @@ class GameState:
 
     @property
     def state_key(self) -> tuple:
-        """Hashable key for WE table lookup."""
+        """Hashable key for WE table lookup (excludes status)."""
         return (self.inning, self.half, self.outs, self.runners, self.score_diff)
 
     def has_changed(self, other: GameState) -> bool:
         """Check if the game state has meaningfully changed."""
-        return self.state_key != other.state_key
+        return self.state_key != other.state_key or self.status != other.status
 
 
 @dataclass
@@ -74,16 +75,29 @@ class LiveGamePoller:
                     feed = response.json()
 
                     state_dict = parse_game_state(feed)
-                    state = GameState(game_pk=self.game_pk, **state_dict)
 
-                    # Check if game is over
-                    game_status = (
+                    # Determine normalized game status from MLB API
+                    detailed_state = (
                         feed.get("gameData", {})
                         .get("status", {})
                         .get("detailedState", "")
                     )
-                    if game_status in ("Final", "Game Over", "Completed Early"):
-                        log.info("game_finished", game_pk=self.game_pk, status=game_status)
+                    if detailed_state in ("Final", "Game Over", "Completed Early"):
+                        normalized_status = "final"
+                    elif detailed_state in ("Postponed", "Suspended", "Delayed", "Delayed Start"):
+                        normalized_status = "delayed"
+                    else:
+                        normalized_status = "live"
+
+                    state = GameState(
+                        game_pk=self.game_pk,
+                        status=normalized_status,
+                        **state_dict,
+                    )
+
+                    # Check if game is over
+                    if normalized_status == "final":
+                        log.info("game_finished", game_pk=self.game_pk, status=detailed_state)
                         if self.on_state_change:
                             self.on_state_change(state)
                         break

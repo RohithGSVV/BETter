@@ -186,10 +186,13 @@ def parse_game_state(feed: dict) -> dict:
     if offense.get("third"):
         runners_on |= 0b001
 
+    # Clamp outs to 0-2: MLB API returns 3 for finished half-innings / final games
+    raw_outs = linescore.get("outs", 0)
+
     return {
         "inning": linescore.get("currentInning", 1),
         "half": "top" if linescore.get("inningHalf", "Top") == "Top" else "bot",
-        "outs": linescore.get("outs", 0),
+        "outs": max(0, min(2, raw_outs)),
         "runners": runners_on,
         "home_score": linescore.get("teams", {}).get("home", {}).get("runs", 0),
         "away_score": linescore.get("teams", {}).get("away", {}).get("runs", 0),

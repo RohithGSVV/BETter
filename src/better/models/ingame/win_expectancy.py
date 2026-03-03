@@ -135,6 +135,9 @@ def _compute_win_prob(
     3. Use a Poisson/normal approximation to compute
        P(home_runs_remaining > away_runs_remaining + deficit)
     """
+    # Clamp outs to valid range (MLB API returns 3 for finished half-innings)
+    outs = max(0, min(2, outs))
+
     # Half-innings remaining for each team
     if half == "top":
         # Top of inning: away is batting
@@ -191,7 +194,8 @@ def _compute_win_prob(
 
 def _partial_half(outs: int) -> float:
     """Fraction of a half-inning remaining based on current outs."""
-    return (3 - outs) / 3.0
+    clamped = max(0, min(2, outs))
+    return (3 - clamped) / 3.0
 
 
 def _runner_expected_runs(runners: int, outs: int) -> float:
@@ -200,6 +204,9 @@ def _runner_expected_runs(runners: int, outs: int) -> float:
     Uses the standard run-expectancy matrix values (MLB averages).
     runners is 3-bit encoded: bit2=1B, bit1=2B, bit0=3B
     """
+    # Clamp outs to valid range
+    clamped_outs = max(0, min(2, outs))
+
     # Run expectancy matrix (outs → {runner_state: expected_runs})
     # Values from historical MLB averages (Tom Tango's tables)
     RE = {
@@ -216,7 +223,7 @@ def _runner_expected_runs(runners: int, outs: int) -> float:
             0b110: 0.26, 0b101: 0.19, 0b011: 0.23, 0b111: 0.33,
         },
     }
-    return RE.get(outs, RE[2]).get(runners, 0.0)
+    return RE.get(clamped_outs, RE[2]).get(runners, 0.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,10 +331,11 @@ class LiveWinProbModel:
         if key in self._we_cache:
             return self._we_cache[key]
 
-        # Clamp extreme score diffs to table bounds
+        # Clamp to table bounds (outs, score_diff, inning)
         inning, half, outs, runners, score_diff = key
+        clamped_outs = max(0, min(2, outs))
         clamped_diff = max(-15, min(15, score_diff))
-        clamped_key = (min(inning, 12), half, outs, runners, clamped_diff)
+        clamped_key = (min(inning, 12), half, clamped_outs, runners, clamped_diff)
         if clamped_key in self._we_cache:
             return self._we_cache[clamped_key]
 
