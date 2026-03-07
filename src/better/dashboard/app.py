@@ -189,6 +189,12 @@ def game_detail_page(game_pk: int):
     _build_page("game_detail", game_pk=game_pk)
 
 
+@ui.page("/schedule")
+def schedule_page():
+    apply_theme()
+    _build_page("schedule")
+
+
 @ui.page("/backtest")
 def backtest_page():
     apply_theme()
@@ -234,6 +240,7 @@ def _build_page(active: str, **kwargs) -> None:
         nav_items = [
             ("Today's Games", "/", "sports_baseball", "games"),
             ("Live Games", "/live", "live_tv", "live"),
+            ("Schedule", "/schedule", "event", "schedule"),
             ("Backtest Results", "/backtest", "show_chart", "backtest"),
             ("Edge Analysis", "/edge", "insights", "edge"),
             ("Model Status", "/models", "hub", "models"),
@@ -277,6 +284,10 @@ def _build_page(active: str, **kwargs) -> None:
             from better.dashboard.pages.game_detail import render
 
             render(get_service(), kwargs.get("game_pk", 0))
+        elif active == "schedule":
+            from better.dashboard.pages.schedule import render
+
+            render(get_service())
         elif active == "backtest":
             from better.dashboard.pages.backtest import render
 

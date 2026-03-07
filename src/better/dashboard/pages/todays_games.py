@@ -1,48 +1,17 @@
-"""Today's Games page — schedule, predictions, edges, bet recommendations."""
+"""Today's Games page — predictions overview, clean and compact."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date
 
 from nicegui import ui
 
 from better.api.services import PredictionService
-
-# ── MLB team colors (primary, secondary) ─────────────────────────────────
-
-TEAM_COLORS: dict[str, tuple[str, str]] = {
-    "ARI": ("#a71930", "#e3d4ad"), "ATL": ("#ce1141", "#13274f"),
-    "BAL": ("#df4601", "#27251f"), "BOS": ("#bd3039", "#0c2340"),
-    "CHC": ("#0e3386", "#cc3433"), "CWS": ("#27251f", "#c4ced4"),
-    "CIN": ("#c6011f", "#000000"), "CLE": ("#00385d", "#e31937"),
-    "COL": ("#33006f", "#c4ced4"), "DET": ("#0c2340", "#fa4616"),
-    "HOU": ("#002d62", "#eb6e1f"), "KC":  ("#004687", "#bd9b60"),
-    "LAA": ("#ba0021", "#003263"), "LAD": ("#005a9c", "#ef3e42"),
-    "MIA": ("#00a3e0", "#ef3340"), "MIL": ("#ffc52f", "#12284b"),
-    "MIN": ("#002b5c", "#d31145"), "NYM": ("#002d72", "#ff5910"),
-    "NYY": ("#003087", "#c4ced4"), "OAK": ("#003831", "#efb21e"),
-    "PHI": ("#e81828", "#002d72"), "PIT": ("#27251f", "#fdb827"),
-    "SD":  ("#2f241d", "#ffc425"), "SF":  ("#fd5a1e", "#27251f"),
-    "SEA": ("#0c2c56", "#005c5c"), "STL": ("#c41e3a", "#0c2340"),
-    "TB":  ("#092c5c", "#8fbce6"), "TEX": ("#003278", "#c0111f"),
-    "TOR": ("#134a8e", "#1d2d5c"), "WSH": ("#ab0003", "#14225a"),
-}
-
-
-def _team_badge(abbr: str) -> str:
-    """Return an HTML badge with team color dot."""
-    primary, _ = TEAM_COLORS.get(abbr, ("#3b82f6", "#1e293b"))
-    return (
-        f'<span style="display:inline-flex; align-items:center; gap:5px;">'
-        f'<span style="width:8px; height:8px; border-radius:50%; '
-        f'background:{primary}; display:inline-block; box-shadow: 0 0 6px {primary}80;"></span>'
-        f'<span style="font-weight:600; letter-spacing:0.02em;">{abbr}</span>'
-        f'</span>'
-    )
+from better.config import settings
 
 
 def render(svc: PredictionService) -> None:
-    """Render the Today's Games page."""
+    """Render the Today's Games page — focused on predictions table."""
 
     # Page title
     with ui.row().classes("items-center gap-3 w-full"):
@@ -80,29 +49,60 @@ def render(svc: PredictionService) -> None:
                     ui.label(
                         "This is normal during the off-season or on off-days."
                     ).classes("text-gray-400 text-sm")
-
-        # Show upcoming even when no games today
-        _show_upcoming_games(svc)
         return
 
-    # Summary metrics
+    # Summary metrics (clickable)
     n_games = len(predictions)
     n_bets = len(recommendations)
     edges = [p["edge"] for p in predictions if p.get("edge") is not None]
     avg_edge = sum(edges) / len(edges) if edges else 0
+    has_odds = bool(settings.odds_api_key)
 
     with ui.row().classes("w-full gap-4 flex-wrap"):
-        _metric_card("Games Today", str(n_games), "sports_baseball", "blue")
-        _metric_card("Bets Recommended", str(n_bets), "casino", "green")
+        # Games Today → navigates to Live Games
         _metric_card(
-            "Avg Edge",
-            f"{avg_edge:+.1%}" if edges else "N/A",
-            "trending_up",
-            "amber",
+            "Games Today", str(n_games), "sports_baseball", "blue",
+            on_click=lambda: ui.navigate.to("/live"),
+            subtitle="View Live",
         )
+
+        # Bets Recommended
+        if has_odds:
+            _metric_card("Bets Recommended", str(n_bets), "casino", "green")
+        else:
+            _metric_card(
+                "Bets Recommended", "---", "casino", "green",
+                subtitle="No Odds API Key",
+            )
+
+        # Avg Edge
+        if has_odds and edges:
+            _metric_card("Avg Edge", f"{avg_edge:+.1%}", "trending_up", "amber")
+        else:
+            _metric_card(
+                "Avg Edge", "---", "trending_up", "amber",
+                subtitle="Needs Odds API" if not has_odds else "No edges",
+            )
+
         if recommendations:
             total_bet = sum(r["bet_amount"] for r in recommendations)
             _metric_card("Total Wagered", f"${total_bet:.0f}", "payments", "purple")
+
+    # Odds API key missing hint
+    if not has_odds:
+        with ui.card().classes("w-full glow-card px-5 py-3").style(
+            "border-left: 3px solid #3b82f6;"
+        ):
+            with ui.row().classes("items-center gap-3"):
+                ui.icon("info").classes("text-blue-400 text-lg")
+                with ui.column().classes("gap-0"):
+                    ui.label("Odds & Edge Unavailable").classes(
+                        "text-sm font-semibold text-gray-300"
+                    )
+                    ui.label(
+                        "Set ODDS_API_KEY in your .env to enable market odds, "
+                        "edge detection, and bet recommendations."
+                    ).classes("text-[0.7rem] text-gray-500")
 
     # Predictions table
     with ui.row().classes("section-header w-full mt-2"):
@@ -146,15 +146,6 @@ def render(svc: PredictionService) -> None:
         "w-full"
     ).props("flat bordered dense")
 
-    # Game cards — visual matchup display (clickable)
-    with ui.row().classes("section-header w-full mt-4"):
-        ui.icon("view_module").classes("text-blue-400")
-        ui.label("Game Cards").classes("text-xl font-semibold")
-
-    with ui.row().classes("w-full gap-4 flex-wrap"):
-        for p in predictions:
-            _prediction_card(p)
-
     # Bet recommendations
     if recommendations:
         with ui.row().classes("section-header w-full mt-4"):
@@ -194,155 +185,16 @@ def render(svc: PredictionService) -> None:
             "w-full"
         ).props("flat bordered dense")
 
-    elif predictions:
-        with ui.card().classes("w-full glow-card px-6 py-4").style(
-            "border-left: 4px solid #f59e0b;"
-        ):
-            with ui.row().classes("items-center gap-3"):
-                ui.icon("info").classes("text-amber-400 text-xl")
-                with ui.column().classes("gap-0"):
-                    ui.label("No bets recommended").classes("font-semibold text-gray-300")
-                    ui.label(
-                        "No games meet the minimum edge threshold with current odds."
-                    ).classes("text-gray-500 text-sm")
 
-    # Upcoming games section
-    _show_upcoming_games(svc)
-
-
-def _prediction_card(p: dict) -> None:
-    """Render a single prediction card — clickable to open game detail."""
-    home = p["home_team"]
-    away = p["away_team"]
-    game_pk = p.get("game_pk", 0)
-    best = p.get("meta_prob") or p.get("consensus_prob") or p.get("bayesian_prob")
-    home_color = TEAM_COLORS.get(home, ("#3b82f6", "#1e293b"))[0]
-    away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
-
-    with ui.card().classes(
-        "glow-card px-5 py-4 min-w-[220px] max-w-[280px] cursor-pointer"
-    ).on("click", lambda gpk=game_pk: ui.navigate.to(f"/game/{gpk}")):
-        with ui.row().classes("items-center justify-between w-full"):
-            ui.html(_team_badge(away)).classes("text-sm")
-            ui.label("@").classes("text-xs text-gray-500")
-            ui.html(_team_badge(home)).classes("text-sm")
-
-        with ui.row().classes("justify-between w-full mt-1"):
-            ui.label(p.get("away_sp_name", "TBD")).classes(
-                "text-[0.65rem] text-gray-500 truncate max-w-[100px]"
-            )
-            ui.label(p.get("home_sp_name", "TBD")).classes(
-                "text-[0.65rem] text-gray-500 truncate max-w-[100px]"
-            )
-
-        ui.separator().classes("my-2 opacity-20")
-
-        if best:
-            away_pct = (1 - best) * 100
-            home_pct = best * 100
-            ui.html(f'''
-                <div style="display:flex; width:100%; height:6px; border-radius:3px; overflow:hidden;">
-                    <div style="width:{away_pct}%; background:{away_color};"></div>
-                    <div style="width:{home_pct}%; background:{home_color};"></div>
-                </div>
-            ''')
-            with ui.row().classes("justify-between w-full mt-1"):
-                ui.label(f"{1-best:.0%}").classes("text-xs text-gray-400")
-                ui.label(f"P(Home) {best:.0%}").classes("text-xs text-gray-400")
-
-        edge_val = p.get("edge")
-        if edge_val is not None:
-            color = "#22c55e" if edge_val > 0 else "#ef4444"
-            ui.html(f'''
-                <div style="display:inline-flex; align-items:center; gap:4px; margin-top:6px;
-                            padding:2px 8px; border-radius:10px;
-                            background:{color}15; border:1px solid {color}40;">
-                    <span style="font-size:0.7rem; color:{color}; font-weight:600;">
-                        Edge {edge_val:+.1%}
-                    </span>
-                </div>
-            ''')
-
-
-def _show_upcoming_games(svc: PredictionService) -> None:
-    """Show upcoming games for the next few days."""
-    try:
-        upcoming = svc.get_upcoming_schedule(days=3)
-    except Exception:
-        return
-
-    if not upcoming:
-        return
-
-    with ui.row().classes("section-header w-full mt-6"):
-        ui.icon("event").classes("text-blue-400")
-        ui.label("Upcoming Games").classes("text-xl font-semibold")
-
-    for date_str, games in sorted(upcoming.items()):
-        try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            day_label = dt.strftime("%A, %B %d")
-        except ValueError:
-            day_label = date_str
-
-        with ui.row().classes("items-center gap-2 w-full mt-3"):
-            ui.icon("calendar_today").classes("text-gray-400 text-sm")
-            ui.label(day_label).classes("text-sm font-semibold text-gray-300")
-            ui.badge(str(len(games))).props("color=primary outline")
-
-        with ui.row().classes("w-full gap-3 flex-wrap"):
-            for g in games:
-                _upcoming_game_card(g)
-
-
-def _upcoming_game_card(game: dict) -> None:
-    """Render a compact upcoming game card."""
-    home = game.get("home_team", "")
-    away = game.get("away_team", "")
-    home_color = TEAM_COLORS.get(home, ("#3b82f6", "#1e293b"))[0]
-    away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
-    game_time = game.get("game_time", "")
-    venue = game.get("venue", "")
-
-    with ui.card().classes(
-        "glow-card px-4 py-3 min-w-[200px] max-w-[260px]"
-    ).style("border-top: 2px solid #3b82f630;"):
-        # Teams
-        with ui.row().classes("items-center justify-between w-full"):
-            ui.html(_team_badge(away)).classes("text-sm")
-            ui.label("@").classes("text-xs text-gray-500")
-            ui.html(_team_badge(home)).classes("text-sm")
-
-        # Pitchers
-        home_sp = game.get("home_sp_name", "")
-        away_sp = game.get("away_sp_name", "")
-        if home_sp or away_sp:
-            with ui.row().classes("justify-between w-full mt-1"):
-                ui.label(away_sp or "TBD").classes(
-                    "text-[0.6rem] text-gray-500 truncate max-w-[90px]"
-                )
-                ui.label(home_sp or "TBD").classes(
-                    "text-[0.6rem] text-gray-500 truncate max-w-[90px]"
-                )
-
-        # Time and venue
-        with ui.row().classes("items-center gap-2 mt-2"):
-            if game_time:
-                ui.html(
-                    f'<span style="font-size:0.65rem; color:#60a5fa; '
-                    f'font-weight:500;">{game_time}</span>'
-                )
-            if venue:
-                ui.html(
-                    f'<span style="font-size:0.6rem; color:#6b7280; '
-                    f'overflow:hidden; text-overflow:ellipsis; '
-                    f'white-space:nowrap; max-width:140px; display:inline-block;">'
-                    f'{venue}</span>'
-                )
-
-
-def _metric_card(title: str, value: str, icon: str, color: str = "blue") -> None:
-    """Render a styled metric card with colored accent."""
+def _metric_card(
+    title: str,
+    value: str,
+    icon: str,
+    color: str = "blue",
+    on_click=None,
+    subtitle: str = "",
+) -> None:
+    """Render a styled metric card with colored accent and optional click."""
     color_map = {
         "blue": ("#3b82f6", "metric-blue"),
         "green": ("#22c55e", "metric-green"),
@@ -352,7 +204,15 @@ def _metric_card(title: str, value: str, icon: str, color: str = "blue") -> None
     }
     hex_color, css_class = color_map.get(color, color_map["blue"])
 
-    with ui.card().classes(f"glow-card {css_class} px-5 py-4 min-w-[160px]"):
+    card_classes = f"glow-card {css_class} px-5 py-4 min-w-[160px]"
+    if on_click:
+        card_classes += " cursor-pointer"
+
+    card = ui.card().classes(card_classes)
+    if on_click:
+        card.on("click", on_click)
+
+    with card:
         with ui.row().classes("items-center gap-3"):
             ui.icon(icon).classes("text-2xl").style(f"color: {hex_color};")
             with ui.column().classes("gap-0"):
@@ -360,3 +220,7 @@ def _metric_card(title: str, value: str, icon: str, color: str = "blue") -> None
                 ui.label(title).classes(
                     "text-[0.65rem] text-gray-400 uppercase tracking-wider"
                 )
+                if subtitle:
+                    ui.label(subtitle).classes(
+                        "text-[0.6rem] text-gray-500 italic"
+                    )

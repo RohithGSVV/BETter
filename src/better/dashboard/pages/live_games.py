@@ -50,7 +50,10 @@ def _out_dots(outs: int) -> str:
     dots = ""
     for i in range(3):
         color = "#f59e0b" if i < outs else "rgba(255,255,255,0.12)"
-        dots += f'<span style="width:7px;height:7px;border-radius:50%;background:{color};display:inline-block;margin:0 1px;"></span>'
+        dots += (
+            f'<span style="width:7px;height:7px;border-radius:50%;'
+            f'background:{color};display:inline-block;margin:0 1px;"></span>'
+        )
     return f'<span style="display:inline-flex;align-items:center;gap:1px;">{dots}</span>'
 
 
@@ -58,6 +61,33 @@ def _inning_display(inning: int, half: str) -> str:
     """Format inning as arrow + number."""
     arrow = "\u25B2" if half == "top" else "\u25BC"
     return f"{arrow} {inning}"
+
+
+def _format_duration(started_at) -> str:
+    """Format elapsed time since game started."""
+    if started_at is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    delta = now - started_at
+    total_mins = int(delta.total_seconds() / 60)
+    hours = total_mins // 60
+    mins = total_mins % 60
+    if hours > 0:
+        return f"{hours}h {mins}m"
+    return f"{mins}m"
+
+
+def _inning_progress(inning: int, half: str) -> float:
+    """Compute game progress as 0-1 for a 9-inning game.
+
+    Each half-inning is ~1/18 of a regulation game.
+    """
+    # half_innings completed: (inning-1)*2 + (1 if bottom)
+    completed = (inning - 1) * 2
+    if half == "bottom":
+        completed += 1
+    # 18 half-innings in a 9-inning game
+    return min(completed / 18.0, 1.0)
 
 
 def render(svc: PredictionService) -> None:
@@ -118,7 +148,10 @@ def _render_live_content(svc: PredictionService) -> None:
     # Live games first
     if live:
         with ui.row().classes("section-header w-full mt-2"):
-            ui.html('<span style="color:#ef4444; font-size:0.6rem; animation: pulse 1.5s infinite;">&#9679;</span>')
+            ui.html(
+                '<span style="color:#ef4444; font-size:0.6rem; '
+                'animation: pulse 1.5s infinite;">&#9679;</span>'
+            )
             ui.label("LIVE").classes("text-lg font-bold text-red-400")
 
         with ui.row().classes("w-full gap-4 flex-wrap"):
@@ -154,14 +187,19 @@ def _live_game_card(snap) -> None:
     away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
 
     is_live = snap.status == "live"
-    border_color = "#ef4444" if is_live else ("#3b82f6" if snap.status == "pre" else "#4b5563")
+    is_final = snap.status == "final"
+    border_color = (
+        "#ef4444" if is_live
+        else ("#4b5563" if is_final else "#3b82f6")
+    )
 
     with ui.card().classes(
         "glow-card px-5 py-4 min-w-[280px] max-w-[340px] cursor-pointer"
     ).style(
         f"border-top: 2px solid {border_color};"
     ).on("click", lambda gpk=snap.game_pk: ui.navigate.to(f"/game/{gpk}")):
-        # Status + inning
+
+        # Status + inning + duration
         with ui.row().classes("items-center justify-between w-full"):
             if is_live:
                 ui.html(
@@ -172,14 +210,33 @@ def _live_game_card(snap) -> None:
                 )
                 ui.html(f'{_out_dots(snap.outs)}')
                 ui.html(f'{_runner_dots(snap.runners)}')
-            elif snap.status == "final":
-                ui.html('<span style="font-size:0.7rem; color:#6b7280; font-weight:600;">FINAL</span>')
+            elif is_final:
+                ui.html(
+                    '<span style="font-size:0.7rem; color:#6b7280; '
+                    'font-weight:600;">FINAL</span>'
+                )
             else:
-                ui.html('<span style="font-size:0.7rem; color:#3b82f6; font-weight:600;">PRE-GAME</span>')
+                # Pre-game: show scheduled start time
+                time_label = snap.game_time if snap.game_time else "PRE-GAME"
+                ui.html(
+                    f'<span style="font-size:0.7rem; color:#3b82f6; '
+                    f'font-weight:600;">{time_label}</span>'
+                )
+
+        # Duration badge (for live and final games)
+        if is_live or is_final:
+            duration = _format_duration(snap.started_at)
+            if duration:
+                with ui.row().classes("w-full mt-1"):
+                    ui.html(
+                        f'<span style="font-size:0.6rem; color:#6b7280; '
+                        f'display:inline-flex; align-items:center; gap:3px;">'
+                        f'<span style="font-size:0.55rem;">&#9200;</span>'
+                        f'{duration}</span>'
+                    )
 
         # Score display
-        with ui.row().classes("items-center justify-between w-full mt-3"):
-            # Away team
+        with ui.row().classes("items-center justify-between w-full mt-2"):
             with ui.row().classes("items-center gap-2"):
                 ui.html(
                     f'<span style="width:10px; height:10px; border-radius:50%; '
@@ -190,7 +247,6 @@ def _live_game_card(snap) -> None:
             ui.label(str(snap.away_score)).classes("text-2xl font-bold text-gray-300")
 
         with ui.row().classes("items-center justify-between w-full"):
-            # Home team
             with ui.row().classes("items-center gap-2"):
                 ui.html(
                     f'<span style="width:10px; height:10px; border-radius:50%; '
@@ -201,6 +257,24 @@ def _live_game_card(snap) -> None:
             ui.label(str(snap.home_score)).classes("text-2xl font-bold text-gray-300")
 
         ui.separator().classes("my-2 opacity-20")
+
+        # Inning progress bar (for live games)
+        if is_live:
+            progress = _inning_progress(snap.inning, snap.half)
+            progress_pct = progress * 100
+            ui.html(f'''
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                    <div style="flex:1; height:4px; border-radius:2px;
+                                background:rgba(255,255,255,0.06); overflow:hidden;">
+                        <div style="width:{progress_pct}%; height:100%;
+                                    background:linear-gradient(90deg, #3b82f6, #60a5fa);
+                                    border-radius:2px; transition: width 0.5s ease;"></div>
+                    </div>
+                    <span style="font-size:0.55rem; color:#6b7280; min-width:20px;">
+                        {snap.inning}/9
+                    </span>
+                </div>
+            ''')
 
         # Win probability bar
         away_pct = (1 - snap.win_prob) * 100
@@ -237,7 +311,8 @@ def _live_game_card(snap) -> None:
                     ui.label("Market").classes("text-[0.6rem] text-gray-500 uppercase")
                     ui.label(f"{snap.market_prob:.1%}").classes("text-sm")
                     ui.html(
-                        f'<span style="font-size:0.6rem; color:#6b7280;">{snap.market_source}</span>'
+                        f'<span style="font-size:0.6rem; color:#6b7280;">'
+                        f'{snap.market_source}</span>'
                     )
 
                 if snap.edge is not None:
@@ -255,10 +330,7 @@ def _live_game_card(snap) -> None:
 
 def _status_pill(label: str, count: int, color: str) -> None:
     """Render a status count pill."""
-    if count == 0:
-        opacity = "0.4"
-    else:
-        opacity = "1"
+    opacity = "0.4" if count == 0 else "1"
     ui.html(f'''
         <span style="display:inline-flex; align-items:center; gap:5px; padding:3px 10px;
                      border-radius:12px; background:{color}20; border:1px solid {color}50;

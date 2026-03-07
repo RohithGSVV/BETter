@@ -62,6 +62,10 @@ class LiveGameSnapshot:
     # Status
     status: str = "live"        # "live", "final", "pre"
 
+    # Timing
+    game_time: str = ""         # scheduled start time (e.g. "01:05 PM")
+    started_at: datetime | None = None  # when first live state was received
+
     def to_dict(self) -> dict:
         return {
             "game_pk": self.game_pk,
@@ -82,6 +86,8 @@ class LiveGameSnapshot:
             "edge": self.edge,
             "market_source": self.market_source,
             "status": self.status,
+            "game_time": self.game_time,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
         }
 
 
@@ -174,6 +180,7 @@ class LiveGameManager:
                 pregame_prob=pregame,
                 we_weight=0.0,
                 status="pre",
+                game_time=game.get("game_time", ""),
             )
 
             # Create poller with aggressive interval
@@ -231,6 +238,15 @@ class LiveGameManager:
         else:
             result = self._we_model.predict(state, pregame_prob=pregame)
 
+        # Carry forward timing info from previous snapshot
+        prev = self._snapshots.get(game_pk)
+        started_at = prev.started_at if prev else None
+        game_time = prev.game_time if prev else game_info.get("game_time", "")
+
+        # Track when the game first went live
+        if state.status == "live" and started_at is None:
+            started_at = datetime.now(timezone.utc)
+
         snap = LiveGameSnapshot(
             game_pk=game_pk,
             home_team=game_info.get("home_team", ""),
@@ -250,6 +266,8 @@ class LiveGameManager:
             edge=round(result["win_prob"] - market, 4) if market else None,
             market_source="kalshi" if market else "",
             status=state.status,
+            game_time=game_time,
+            started_at=started_at,
         )
 
         self._snapshots[game_pk] = snap
