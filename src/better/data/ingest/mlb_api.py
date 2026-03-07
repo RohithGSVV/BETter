@@ -148,9 +148,20 @@ def _parse_schedule_game(game: dict) -> dict:
     home_sp = home.get("probablePitcher", {})
     away_sp = away.get("probablePitcher", {})
 
+    # Parse game start time (MLB API returns ISO datetime like "2026-03-03T18:05:00Z")
+    game_datetime_str = game.get("gameDate", "")
+    game_time = ""
+    if game_datetime_str:
+        try:
+            dt = datetime.fromisoformat(game_datetime_str.replace("Z", "+00:00"))
+            game_time = dt.strftime("%I:%M %p")
+        except (ValueError, TypeError):
+            pass
+
     return {
         "game_pk": game["gamePk"],
         "game_date": game.get("officialDate", game.get("gameDate", "")[:10]),
+        "game_time": game_time,
         "status": game.get("status", {}).get("detailedState", ""),
         "home_team": home.get("team", {}).get("abbreviation", ""),
         "away_team": away.get("team", {}).get("abbreviation", ""),

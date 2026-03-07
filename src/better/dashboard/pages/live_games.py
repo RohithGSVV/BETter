@@ -156,9 +156,11 @@ def _live_game_card(snap) -> None:
     is_live = snap.status == "live"
     border_color = "#ef4444" if is_live else ("#3b82f6" if snap.status == "pre" else "#4b5563")
 
-    with ui.card().classes("glow-card px-5 py-4 min-w-[280px] max-w-[340px]").style(
+    with ui.card().classes(
+        "glow-card px-5 py-4 min-w-[280px] max-w-[340px] cursor-pointer"
+    ).style(
         f"border-top: 2px solid {border_color};"
-    ):
+    ).on("click", lambda gpk=snap.game_pk: ui.navigate.to(f"/game/{gpk}")):
         # Status + inning
         with ui.row().classes("items-center justify-between w-full"):
             if is_live:

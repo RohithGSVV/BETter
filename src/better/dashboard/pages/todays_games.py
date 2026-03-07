@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from nicegui import ui
 
@@ -80,7 +80,9 @@ def render(svc: PredictionService) -> None:
                     ui.label(
                         "This is normal during the off-season or on off-days."
                     ).classes("text-gray-400 text-sm")
-            _show_next_game_day()
+
+        # Show upcoming even when no games today
+        _show_upcoming_games(svc)
         return
 
     # Summary metrics
@@ -144,60 +146,14 @@ def render(svc: PredictionService) -> None:
         "w-full"
     ).props("flat bordered dense")
 
-    # Game cards — visual matchup display
+    # Game cards — visual matchup display (clickable)
     with ui.row().classes("section-header w-full mt-4"):
         ui.icon("view_module").classes("text-blue-400")
         ui.label("Game Cards").classes("text-xl font-semibold")
 
     with ui.row().classes("w-full gap-4 flex-wrap"):
-        for p in predictions[:8]:
-            home = p["home_team"]
-            away = p["away_team"]
-            best = p.get("meta_prob") or p.get("consensus_prob") or p.get("bayesian_prob")
-            home_color = TEAM_COLORS.get(home, ("#3b82f6", "#1e293b"))[0]
-            away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
-
-            with ui.card().classes("glow-card px-5 py-4 min-w-[220px] max-w-[280px]"):
-                with ui.row().classes("items-center justify-between w-full"):
-                    ui.html(_team_badge(away)).classes("text-sm")
-                    ui.label("@").classes("text-xs text-gray-500")
-                    ui.html(_team_badge(home)).classes("text-sm")
-
-                with ui.row().classes("justify-between w-full mt-1"):
-                    ui.label(p.get("away_sp_name", "TBD")).classes(
-                        "text-[0.65rem] text-gray-500 truncate max-w-[100px]"
-                    )
-                    ui.label(p.get("home_sp_name", "TBD")).classes(
-                        "text-[0.65rem] text-gray-500 truncate max-w-[100px]"
-                    )
-
-                ui.separator().classes("my-2 opacity-20")
-
-                if best:
-                    away_pct = (1 - best) * 100
-                    home_pct = best * 100
-                    ui.html(f'''
-                        <div style="display:flex; width:100%; height:6px; border-radius:3px; overflow:hidden;">
-                            <div style="width:{away_pct}%; background:{away_color};"></div>
-                            <div style="width:{home_pct}%; background:{home_color};"></div>
-                        </div>
-                    ''')
-                    with ui.row().classes("justify-between w-full mt-1"):
-                        ui.label(f"{1-best:.0%}").classes("text-xs text-gray-400")
-                        ui.label(f"P(Home) {best:.0%}").classes("text-xs text-gray-400")
-
-                edge_val = p.get("edge")
-                if edge_val is not None:
-                    color = "#22c55e" if edge_val > 0 else "#ef4444"
-                    ui.html(f'''
-                        <div style="display:inline-flex; align-items:center; gap:4px; margin-top:6px;
-                                    padding:2px 8px; border-radius:10px;
-                                    background:{color}15; border:1px solid {color}40;">
-                            <span style="font-size:0.7rem; color:{color}; font-weight:600;">
-                                Edge {edge_val:+.1%}
-                            </span>
-                        </div>
-                    ''')
+        for p in predictions:
+            _prediction_card(p)
 
     # Bet recommendations
     if recommendations:
@@ -250,6 +206,140 @@ def render(svc: PredictionService) -> None:
                         "No games meet the minimum edge threshold with current odds."
                     ).classes("text-gray-500 text-sm")
 
+    # Upcoming games section
+    _show_upcoming_games(svc)
+
+
+def _prediction_card(p: dict) -> None:
+    """Render a single prediction card — clickable to open game detail."""
+    home = p["home_team"]
+    away = p["away_team"]
+    game_pk = p.get("game_pk", 0)
+    best = p.get("meta_prob") or p.get("consensus_prob") or p.get("bayesian_prob")
+    home_color = TEAM_COLORS.get(home, ("#3b82f6", "#1e293b"))[0]
+    away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
+
+    with ui.card().classes(
+        "glow-card px-5 py-4 min-w-[220px] max-w-[280px] cursor-pointer"
+    ).on("click", lambda gpk=game_pk: ui.navigate.to(f"/game/{gpk}")):
+        with ui.row().classes("items-center justify-between w-full"):
+            ui.html(_team_badge(away)).classes("text-sm")
+            ui.label("@").classes("text-xs text-gray-500")
+            ui.html(_team_badge(home)).classes("text-sm")
+
+        with ui.row().classes("justify-between w-full mt-1"):
+            ui.label(p.get("away_sp_name", "TBD")).classes(
+                "text-[0.65rem] text-gray-500 truncate max-w-[100px]"
+            )
+            ui.label(p.get("home_sp_name", "TBD")).classes(
+                "text-[0.65rem] text-gray-500 truncate max-w-[100px]"
+            )
+
+        ui.separator().classes("my-2 opacity-20")
+
+        if best:
+            away_pct = (1 - best) * 100
+            home_pct = best * 100
+            ui.html(f'''
+                <div style="display:flex; width:100%; height:6px; border-radius:3px; overflow:hidden;">
+                    <div style="width:{away_pct}%; background:{away_color};"></div>
+                    <div style="width:{home_pct}%; background:{home_color};"></div>
+                </div>
+            ''')
+            with ui.row().classes("justify-between w-full mt-1"):
+                ui.label(f"{1-best:.0%}").classes("text-xs text-gray-400")
+                ui.label(f"P(Home) {best:.0%}").classes("text-xs text-gray-400")
+
+        edge_val = p.get("edge")
+        if edge_val is not None:
+            color = "#22c55e" if edge_val > 0 else "#ef4444"
+            ui.html(f'''
+                <div style="display:inline-flex; align-items:center; gap:4px; margin-top:6px;
+                            padding:2px 8px; border-radius:10px;
+                            background:{color}15; border:1px solid {color}40;">
+                    <span style="font-size:0.7rem; color:{color}; font-weight:600;">
+                        Edge {edge_val:+.1%}
+                    </span>
+                </div>
+            ''')
+
+
+def _show_upcoming_games(svc: PredictionService) -> None:
+    """Show upcoming games for the next few days."""
+    try:
+        upcoming = svc.get_upcoming_schedule(days=3)
+    except Exception:
+        return
+
+    if not upcoming:
+        return
+
+    with ui.row().classes("section-header w-full mt-6"):
+        ui.icon("event").classes("text-blue-400")
+        ui.label("Upcoming Games").classes("text-xl font-semibold")
+
+    for date_str, games in sorted(upcoming.items()):
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            day_label = dt.strftime("%A, %B %d")
+        except ValueError:
+            day_label = date_str
+
+        with ui.row().classes("items-center gap-2 w-full mt-3"):
+            ui.icon("calendar_today").classes("text-gray-400 text-sm")
+            ui.label(day_label).classes("text-sm font-semibold text-gray-300")
+            ui.badge(str(len(games))).props("color=primary outline")
+
+        with ui.row().classes("w-full gap-3 flex-wrap"):
+            for g in games:
+                _upcoming_game_card(g)
+
+
+def _upcoming_game_card(game: dict) -> None:
+    """Render a compact upcoming game card."""
+    home = game.get("home_team", "")
+    away = game.get("away_team", "")
+    home_color = TEAM_COLORS.get(home, ("#3b82f6", "#1e293b"))[0]
+    away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
+    game_time = game.get("game_time", "")
+    venue = game.get("venue", "")
+
+    with ui.card().classes(
+        "glow-card px-4 py-3 min-w-[200px] max-w-[260px]"
+    ).style("border-top: 2px solid #3b82f630;"):
+        # Teams
+        with ui.row().classes("items-center justify-between w-full"):
+            ui.html(_team_badge(away)).classes("text-sm")
+            ui.label("@").classes("text-xs text-gray-500")
+            ui.html(_team_badge(home)).classes("text-sm")
+
+        # Pitchers
+        home_sp = game.get("home_sp_name", "")
+        away_sp = game.get("away_sp_name", "")
+        if home_sp or away_sp:
+            with ui.row().classes("justify-between w-full mt-1"):
+                ui.label(away_sp or "TBD").classes(
+                    "text-[0.6rem] text-gray-500 truncate max-w-[90px]"
+                )
+                ui.label(home_sp or "TBD").classes(
+                    "text-[0.6rem] text-gray-500 truncate max-w-[90px]"
+                )
+
+        # Time and venue
+        with ui.row().classes("items-center gap-2 mt-2"):
+            if game_time:
+                ui.html(
+                    f'<span style="font-size:0.65rem; color:#60a5fa; '
+                    f'font-weight:500;">{game_time}</span>'
+                )
+            if venue:
+                ui.html(
+                    f'<span style="font-size:0.6rem; color:#6b7280; '
+                    f'overflow:hidden; text-overflow:ellipsis; '
+                    f'white-space:nowrap; max-width:140px; display:inline-block;">'
+                    f'{venue}</span>'
+                )
+
 
 def _metric_card(title: str, value: str, icon: str, color: str = "blue") -> None:
     """Render a styled metric card with colored accent."""
@@ -270,33 +360,3 @@ def _metric_card(title: str, value: str, icon: str, color: str = "blue") -> None
                 ui.label(title).classes(
                     "text-[0.65rem] text-gray-400 uppercase tracking-wider"
                 )
-
-
-def _show_next_game_day() -> None:
-    """Try to find the next day with scheduled games."""
-    try:
-        from better.data.ingest.mlb_api import MLBStatsClient
-
-        client = MLBStatsClient()
-        try:
-            today = date.today()
-            for offset in range(1, 8):
-                check_date = today + timedelta(days=offset)
-                games = client.get_schedule(check_date)
-                if games:
-                    with ui.row().classes("items-center gap-2 mt-3"):
-                        ui.icon("event").classes("text-blue-300 text-sm")
-                        ui.label(
-                            f"Next games: {check_date.strftime('%A, %B %d')} "
-                            f"({len(games)} games scheduled)"
-                        ).classes("text-sm text-blue-300")
-                    return
-            ui.label("No games found in the next 7 days.").classes(
-                "text-sm text-gray-500 mt-2"
-            )
-        finally:
-            client.close()
-    except Exception:
-        ui.label("Could not check upcoming schedule.").classes(
-            "text-sm text-gray-500 mt-2"
-        )

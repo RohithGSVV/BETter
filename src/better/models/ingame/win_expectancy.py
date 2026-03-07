@@ -249,12 +249,26 @@ class LiveWinProbModel:
         self._loaded = False
 
     def load(self) -> bool:
-        """Load the WE table into memory for fast lookups."""
+        """Load the WE table into memory for fast lookups.
+
+        Uses a separate read-only DuckDB connection so the dashboard can
+        load the WE table even when the API server holds a write lock on
+        the database file.
+        """
+        import duckdb
+
         try:
-            df = fetch_df(
-                "SELECT inning, half, outs, runners, score_diff, win_prob "
-                "FROM win_expectancy"
-            )
+            # Open our own read-only connection (avoids file-lock conflicts
+            # when another process has the DB open for writing).
+            conn = duckdb.connect(settings.db_path_str, read_only=True)
+            try:
+                df = conn.execute(
+                    "SELECT inning, half, outs, runners, score_diff, win_prob "
+                    "FROM win_expectancy"
+                ).fetchdf()
+            finally:
+                conn.close()
+
             if df.empty:
                 log.warning("we_table_empty")
                 return False

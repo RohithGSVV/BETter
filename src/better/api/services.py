@@ -202,6 +202,33 @@ class PredictionService:
             log.error("schedule_fetch_failed", error=str(exc))
             return []
 
+    def get_upcoming_schedule(self, days: int = 3) -> dict[str, list[dict]]:
+        """Fetch upcoming games for the next N days (excluding today).
+
+        Returns {date_str: [game_dicts]} for each day with games.
+        """
+        from datetime import timedelta
+
+        from better.data.ingest.mlb_api import MLBStatsClient
+
+        result: dict[str, list[dict]] = {}
+        today = date.today()
+
+        try:
+            client = MLBStatsClient()
+            try:
+                for offset in range(1, days + 1):
+                    check_date = today + timedelta(days=offset)
+                    games = client.get_schedule(check_date)
+                    if games:
+                        result[check_date.isoformat()] = games
+            finally:
+                client.close()
+        except Exception as exc:
+            log.warning("upcoming_schedule_failed", error=str(exc))
+
+        return result
+
     # ------------------------------------------------------------------
     # Single-game prediction
     # ------------------------------------------------------------------

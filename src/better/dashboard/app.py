@@ -9,13 +9,19 @@ Run with::
 
 from __future__ import annotations
 
+import asyncio
+
 from nicegui import app, ui
 
 from better.api.services import PredictionService
+from better.utils.logging import get_logger
+
+log = get_logger(__name__)
 
 # ── Shared service (loaded once) ────────────────────────────────────────
 
 _svc: PredictionService | None = None
+_live_task: asyncio.Task | None = None
 
 
 def get_service() -> PredictionService:
@@ -24,6 +30,63 @@ def get_service() -> PredictionService:
         _svc = PredictionService()
         _svc.load_models()
     return _svc
+
+
+async def _start_live_tracking() -> None:
+    """Start the LiveGameManager on dashboard startup."""
+    global _live_task
+    try:
+        svc = get_service()
+        manager = svc.get_live_manager()
+
+        schedule = svc.get_todays_schedule()
+        if not schedule:
+            log.info("dashboard_live_no_games", msg="No games on schedule today")
+            return
+
+        # Build pre-game probabilities
+        pregame_probs: dict[int, float] = {}
+        for game in schedule:
+            gpk = game.get("game_pk")
+            if gpk:
+                preds = svc.predict_game(
+                    game.get("home_team", ""),
+                    game.get("away_team", ""),
+                )
+                best = (
+                    preds.get("meta_learner")
+                    or preds.get("consensus")
+                    or preds.get("bayesian_kalman")
+                )
+                if best:
+                    pregame_probs[gpk] = best
+
+        _live_task = asyncio.create_task(
+            manager.start(schedule, pregame_probs=pregame_probs, poll_interval=3.0)
+        )
+        log.info(
+            "dashboard_live_started",
+            games=len(schedule),
+            pregame_probs=len(pregame_probs),
+        )
+    except Exception as exc:
+        log.warning("dashboard_live_start_failed", error=str(exc))
+
+
+def _stop_live_tracking() -> None:
+    """Stop the LiveGameManager on dashboard shutdown."""
+    global _live_task
+    try:
+        if _svc is not None:
+            _svc.get_live_manager().stop()
+    except Exception:
+        pass
+    if _live_task is not None and not _live_task.done():
+        _live_task.cancel()
+
+
+app.on_startup(_start_live_tracking)
+app.on_shutdown(_stop_live_tracking)
 
 
 # ── Theme ───────────────────────────────────────────────────────────────
@@ -120,6 +183,12 @@ def live_page():
     _build_page("live")
 
 
+@ui.page("/game/{game_pk}")
+def game_detail_page(game_pk: int):
+    apply_theme()
+    _build_page("game_detail", game_pk=game_pk)
+
+
 @ui.page("/backtest")
 def backtest_page():
     apply_theme()
@@ -138,7 +207,7 @@ def models_page():
     _build_page("models")
 
 
-def _build_page(active: str) -> None:
+def _build_page(active: str, **kwargs) -> None:
     """Build the page shell with header, sidebar, and content area."""
 
     # Header
@@ -204,6 +273,10 @@ def _build_page(active: str) -> None:
             from better.dashboard.pages.live_games import render
 
             render(get_service())
+        elif active == "game_detail":
+            from better.dashboard.pages.game_detail import render
+
+            render(get_service(), kwargs.get("game_pk", 0))
         elif active == "backtest":
             from better.dashboard.pages.backtest import render
 
