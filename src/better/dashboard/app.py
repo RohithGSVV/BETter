@@ -157,6 +157,20 @@ CUSTOM_CSS = """
         padding-bottom: 8px;
         border-bottom: 1px solid rgba(255,255,255,0.06);
     }
+
+    /* Schedule table inside cards — no extra border */
+    .schedule-table .q-table__top,
+    .schedule-table .q-table__bottom {
+        padding: 0 !important;
+    }
+    .schedule-table {
+        border: none !important;
+    }
+
+    /* Alternating row tint for tables */
+    .q-table tbody tr:nth-child(even) td {
+        background: rgba(255,255,255,0.015) !important;
+    }
 </style>
 """
 
@@ -238,12 +252,10 @@ def _build_page(active: str, **kwargs) -> None:
         )
 
         nav_items = [
-            ("Today's Games", "/", "sports_baseball", "games"),
-            ("Live Games", "/live", "live_tv", "live"),
+            ("Dashboard", "/", "dashboard", "games"),
             ("Schedule", "/schedule", "event", "schedule"),
-            ("Backtest Results", "/backtest", "show_chart", "backtest"),
-            ("Edge Analysis", "/edge", "insights", "edge"),
-            ("Model Status", "/models", "hub", "models"),
+            ("Backtest", "/backtest", "show_chart", "backtest"),
+            ("Models", "/models", "hub", "models"),
         ]
 
         for label, href, icon, key in nav_items:

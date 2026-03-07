@@ -1,4 +1,4 @@
-"""Schedule page — upcoming games in table format."""
+"""Schedule page — upcoming games with styled tables and team colors."""
 
 from __future__ import annotations
 
@@ -26,13 +26,24 @@ TEAM_COLORS: dict[str, tuple[str, str]] = {
     "SEA": ("#0c2c56", "#005c5c"), "STL": ("#c41e3a", "#0c2340"),
     "TB":  ("#092c5c", "#8fbce6"), "TEX": ("#003278", "#c0111f"),
     "TOR": ("#134a8e", "#1d2d5c"), "WSH": ("#ab0003", "#14225a"),
+    "ATH": ("#003831", "#efb21e"),
+}
+
+TYPE_COLORS: dict[str, str] = {
+    "Spring": "blue-grey",
+    "Regular": "primary",
+    "Wild Card": "orange",
+    "Division": "purple",
+    "League": "deep-purple",
+    "World Series": "amber",
+    "Exhibition": "grey",
 }
 
 
 def render(svc: PredictionService) -> None:
-    """Render the Schedule page with upcoming games in table format."""
+    """Render the Schedule page with upcoming games in styled tables."""
 
-    # Page title
+    # ── Page header ──────────────────────────────────────────────────
     with ui.row().classes("items-center gap-3 w-full"):
         ui.icon("event").classes("text-3xl text-blue-400")
         with ui.column().classes("gap-0"):
@@ -63,6 +74,12 @@ def render(svc: PredictionService) -> None:
                     ).classes("text-gray-400 text-sm")
         return
 
+    type_labels = {
+        "R": "Regular", "S": "Spring", "F": "Wild Card",
+        "D": "Division", "L": "League", "W": "World Series",
+        "E": "Exhibition",
+    }
+
     for date_str, games in sorted(upcoming.items()):
         try:
             dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -70,43 +87,111 @@ def render(svc: PredictionService) -> None:
         except ValueError:
             day_label = date_str
 
-        # Day header
-        with ui.row().classes("items-center gap-3 w-full mt-4"):
-            ui.icon("calendar_today").classes("text-blue-400")
-            ui.label(day_label).classes("text-lg font-semibold text-gray-200")
-            ui.badge(f"{len(games)} games").props("color=primary outline")
+        # ── Day card ─────────────────────────────────────────
+        with ui.card().classes("glow-card w-full px-5 py-4 mt-2"):
+            # Day header
+            with ui.row().classes("items-center gap-3 w-full mb-3"):
+                ui.icon("calendar_today").classes("text-blue-400 text-lg")
+                ui.label(day_label).classes(
+                    "text-lg font-semibold text-gray-200"
+                )
+                ui.badge(f"{len(games)} games").props("color=primary outline")
 
-        # Table for this day
-        columns = [
-            {"name": "matchup", "label": "Matchup", "field": "matchup",
-             "align": "left", "sortable": True},
-            {"name": "time", "label": "Time", "field": "time", "align": "center"},
-            {"name": "away_sp", "label": "Away SP", "field": "away_sp", "align": "left"},
-            {"name": "home_sp", "label": "Home SP", "field": "home_sp", "align": "left"},
-            {"name": "venue", "label": "Venue", "field": "venue", "align": "left"},
-            {"name": "type", "label": "Type", "field": "type", "align": "center"},
-        ]
+            # Table columns
+            columns = [
+                {"name": "matchup", "label": "Matchup", "field": "matchup",
+                 "align": "left", "sortable": True},
+                {"name": "time", "label": "Time", "field": "time",
+                 "align": "center"},
+                {"name": "away_sp", "label": "Away SP", "field": "away_sp",
+                 "align": "left"},
+                {"name": "home_sp", "label": "Home SP", "field": "home_sp",
+                 "align": "left"},
+                {"name": "venue", "label": "Venue", "field": "venue",
+                 "align": "left"},
+                {"name": "type", "label": "Type", "field": "type",
+                 "align": "center"},
+            ]
 
-        type_labels = {
-            "R": "Regular", "S": "Spring", "F": "Wild Card",
-            "D": "Division", "L": "League", "W": "World Series",
-            "E": "Exhibition",
-        }
+            rows = []
+            for g in games:
+                away = g.get("away_team", "")
+                home = g.get("home_team", "")
+                game_type = g.get("game_type", "R")
+                rows.append({
+                    "matchup": f"{away} @ {home}",
+                    "time": g.get("game_time", "TBD"),
+                    "away_sp": g.get("away_sp_name", "") or "TBD",
+                    "home_sp": g.get("home_sp_name", "") or "TBD",
+                    "venue": g.get("venue", ""),
+                    "type": type_labels.get(game_type, game_type),
+                    # Extra data for slot rendering
+                    "away_color": TEAM_COLORS.get(
+                        away, ("#3b82f6",)
+                    )[0],
+                    "home_color": TEAM_COLORS.get(
+                        home, ("#3b82f6",)
+                    )[0],
+                })
 
-        rows = []
-        for g in games:
-            away = g.get("away_team", "")
-            home = g.get("home_team", "")
-            game_type = g.get("game_type", "R")
-            rows.append({
-                "matchup": f"{away} @ {home}",
-                "time": g.get("game_time", "TBD"),
-                "away_sp": g.get("away_sp_name", "") or "TBD",
-                "home_sp": g.get("home_sp_name", "") or "TBD",
-                "venue": g.get("venue", ""),
-                "type": type_labels.get(game_type, game_type),
-            })
+            table = ui.table(
+                columns=columns, rows=rows, row_key="matchup",
+            ).classes("w-full schedule-table").props("flat dense")
 
-        ui.table(columns=columns, rows=rows, row_key="matchup").classes(
-            "w-full"
-        ).props("flat bordered dense")
+            # ── Custom slot: matchup with team color dots ────
+            table.add_slot(
+                "body-cell-matchup",
+                '''
+                <q-td :props="props">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span :style="'width:8px; height:8px; border-radius:50%;'
+                              + 'display:inline-block; background:'
+                              + props.row.away_color
+                              + '; box-shadow: 0 0 4px '
+                              + props.row.away_color + '60;'"></span>
+                        <span style="font-weight:500;">
+                            {{ props.value }}
+                        </span>
+                        <span :style="'width:8px; height:8px; border-radius:50%;'
+                              + 'display:inline-block; background:'
+                              + props.row.home_color
+                              + '; box-shadow: 0 0 4px '
+                              + props.row.home_color + '60;'"></span>
+                    </div>
+                </q-td>
+                ''',
+            )
+
+            # ── Custom slot: type as colored badge ───────────
+            table.add_slot(
+                "body-cell-type",
+                '''
+                <q-td :props="props">
+                    <q-badge
+                        :color="props.value === 'Spring' ? 'blue-grey'
+                              : props.value === 'Regular' ? 'primary'
+                              : props.value === 'Wild Card' ? 'orange'
+                              : 'grey'"
+                        outline
+                        :label="props.value"
+                        style="font-size: 0.65rem;"
+                    />
+                </q-td>
+                ''',
+            )
+
+            # ── Custom slot: time with clock icon ────────────
+            table.add_slot(
+                "body-cell-time",
+                '''
+                <q-td :props="props">
+                    <div style="display:flex; align-items:center; gap:4px;
+                                justify-content:center;">
+                        <span style="font-size:0.6rem; opacity:0.5;">&#128339;</span>
+                        <span style="font-size:0.8rem; font-weight:500;">
+                            {{ props.value }}
+                        </span>
+                    </div>
+                </q-td>
+                ''',
+            )

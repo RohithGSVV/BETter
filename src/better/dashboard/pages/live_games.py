@@ -26,6 +26,7 @@ TEAM_COLORS: dict[str, tuple[str, str]] = {
     "SEA": ("#0c2c56", "#005c5c"), "STL": ("#c41e3a", "#0c2340"),
     "TB":  ("#092c5c", "#8fbce6"), "TEX": ("#003278", "#c0111f"),
     "TOR": ("#134a8e", "#1d2d5c"), "WSH": ("#ab0003", "#14225a"),
+    "ATH": ("#003831", "#efb21e"),
 }
 
 

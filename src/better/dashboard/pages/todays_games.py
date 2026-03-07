@@ -1,4 +1,4 @@
-"""Today's Games page — predictions overview, clean and compact."""
+"""Today's Games — predictions dashboard with visual game cards."""
 
 from __future__ import annotations
 
@@ -9,27 +9,48 @@ from nicegui import ui
 from better.api.services import PredictionService
 from better.config import settings
 
+# ── MLB team colors ──────────────────────────────────────────────────────
+
+TEAM_COLORS: dict[str, tuple[str, str]] = {
+    "ARI": ("#a71930", "#e3d4ad"), "ATL": ("#ce1141", "#13274f"),
+    "BAL": ("#df4601", "#27251f"), "BOS": ("#bd3039", "#0c2340"),
+    "CHC": ("#0e3386", "#cc3433"), "CWS": ("#27251f", "#c4ced4"),
+    "CIN": ("#c6011f", "#000000"), "CLE": ("#00385d", "#e31937"),
+    "COL": ("#33006f", "#c4ced4"), "DET": ("#0c2340", "#fa4616"),
+    "HOU": ("#002d62", "#eb6e1f"), "KC":  ("#004687", "#bd9b60"),
+    "LAA": ("#ba0021", "#003263"), "LAD": ("#005a9c", "#ef3e42"),
+    "MIA": ("#00a3e0", "#ef3340"), "MIL": ("#ffc52f", "#12284b"),
+    "MIN": ("#002b5c", "#d31145"), "NYM": ("#002d72", "#ff5910"),
+    "NYY": ("#003087", "#c4ced4"), "OAK": ("#003831", "#efb21e"),
+    "PHI": ("#e81828", "#002d72"), "PIT": ("#27251f", "#fdb827"),
+    "SD":  ("#2f241d", "#ffc425"), "SF":  ("#fd5a1e", "#27251f"),
+    "SEA": ("#0c2c56", "#005c5c"), "STL": ("#c41e3a", "#0c2340"),
+    "TB":  ("#092c5c", "#8fbce6"), "TEX": ("#003278", "#c0111f"),
+    "TOR": ("#134a8e", "#1d2d5c"), "WSH": ("#ab0003", "#14225a"),
+    "ATH": ("#003831", "#efb21e"),
+}
+
 
 def render(svc: PredictionService) -> None:
-    """Render the Today's Games page — focused on predictions table."""
+    """Render the Today's Games dashboard with visual prediction cards."""
 
-    # Page title
-    with ui.row().classes("items-center gap-3 w-full"):
-        ui.icon("sports_baseball").classes("text-3xl text-blue-400")
-        with ui.column().classes("gap-0"):
-            ui.label("Today's Games").classes("text-2xl font-bold")
-            ui.label(date.today().strftime("%A, %B %d, %Y")).classes(
-                "text-sm text-gray-400"
-            )
+    # ── Page header ──────────────────────────────────────────────────
+    with ui.row().classes("items-center justify-between w-full"):
+        with ui.row().classes("items-center gap-3"):
+            ui.icon("sports_baseball").classes("text-3xl text-blue-400")
+            with ui.column().classes("gap-0"):
+                ui.label("Today's Games").classes("text-2xl font-bold")
+                ui.label(date.today().strftime("%A, %B %d, %Y")).classes(
+                    "text-sm text-gray-400"
+                )
 
-    # Refresh button
-    def refresh():
-        svc.refresh_predictions()
-        ui.navigate.to("/")
+        def refresh():
+            svc.refresh_predictions()
+            ui.navigate.to("/")
 
-    ui.button("Refresh Data", icon="refresh", on_click=refresh).props(
-        "flat size=sm color=primary"
-    ).classes("rounded-lg")
+        ui.button("Refresh", icon="refresh", on_click=refresh).props(
+            "flat size=sm color=primary"
+        ).classes("rounded-lg")
 
     predictions = svc.get_todays_predictions()
     recommendations = svc.get_bet_recommendations()
@@ -51,7 +72,7 @@ def render(svc: PredictionService) -> None:
                     ).classes("text-gray-400 text-sm")
         return
 
-    # Summary metrics (clickable)
+    # ── Summary metrics ──────────────────────────────────────────────
     n_games = len(predictions)
     n_bets = len(recommendations)
     edges = [p["edge"] for p in predictions if p.get("edge") is not None]
@@ -59,14 +80,10 @@ def render(svc: PredictionService) -> None:
     has_odds = bool(settings.odds_api_key)
 
     with ui.row().classes("w-full gap-4 flex-wrap"):
-        # Games Today → navigates to Live Games
         _metric_card(
             "Games Today", str(n_games), "sports_baseball", "blue",
-            on_click=lambda: ui.navigate.to("/live"),
-            subtitle="View Live",
+            on_click=lambda: ui.navigate.to("/live"), subtitle="View Live",
         )
-
-        # Bets Recommended
         if has_odds:
             _metric_card("Bets Recommended", str(n_bets), "casino", "green")
         else:
@@ -74,8 +91,6 @@ def render(svc: PredictionService) -> None:
                 "Bets Recommended", "---", "casino", "green",
                 subtitle="No Odds API Key",
             )
-
-        # Avg Edge
         if has_odds and edges:
             _metric_card("Avg Edge", f"{avg_edge:+.1%}", "trending_up", "amber")
         else:
@@ -83,107 +98,222 @@ def render(svc: PredictionService) -> None:
                 "Avg Edge", "---", "trending_up", "amber",
                 subtitle="Needs Odds API" if not has_odds else "No edges",
             )
-
         if recommendations:
             total_bet = sum(r["bet_amount"] for r in recommendations)
             _metric_card("Total Wagered", f"${total_bet:.0f}", "payments", "purple")
 
-    # Odds API key missing hint
-    if not has_odds:
-        with ui.card().classes("w-full glow-card px-5 py-3").style(
-            "border-left: 3px solid #3b82f6;"
-        ):
-            with ui.row().classes("items-center gap-3"):
-                ui.icon("info").classes("text-blue-400 text-lg")
-                with ui.column().classes("gap-0"):
-                    ui.label("Odds & Edge Unavailable").classes(
-                        "text-sm font-semibold text-gray-300"
-                    )
-                    ui.label(
-                        "Set ODDS_API_KEY in your .env to enable market odds, "
-                        "edge detection, and bet recommendations."
-                    ).classes("text-[0.7rem] text-gray-500")
-
-    # Predictions table
+    # ── Game prediction cards ────────────────────────────────────────
     with ui.row().classes("section-header w-full mt-2"):
         ui.icon("list_alt").classes("text-blue-400")
         ui.label("Predictions").classes("text-xl font-semibold")
+        ui.badge(str(n_games)).props("color=primary outline")
 
-    columns = [
-        {"name": "matchup", "label": "Matchup", "field": "matchup", "align": "left",
-         "sortable": True, "classes": "text-sm", "headerClasses": "text-left"},
-        {"name": "home_sp", "label": "Home SP", "field": "home_sp", "align": "left"},
-        {"name": "away_sp", "label": "Away SP", "field": "away_sp", "align": "left"},
-        {"name": "p_home", "label": "P(Home)", "field": "p_home", "align": "right", "sortable": True},
-        {"name": "bayesian", "label": "Bayesian", "field": "bayesian", "align": "right"},
-        {"name": "mc", "label": "Monte Carlo", "field": "mc", "align": "right"},
-        {"name": "meta", "label": "Meta", "field": "meta", "align": "right"},
-        {"name": "market", "label": "Market", "field": "market", "align": "right"},
-        {"name": "edge", "label": "Edge", "field": "edge", "align": "right", "sortable": True},
-        {"name": "confidence", "label": "Conf.", "field": "confidence", "align": "center"},
-    ]
+    with ui.element("div").classes("w-full").style(
+        "display: grid;"
+        "grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));"
+        "gap: 16px;"
+    ):
+        for p in predictions:
+            _game_prediction_card(p)
 
-    rows = []
-    for p in predictions:
-        best_prob = p.get("meta_prob") or p.get("consensus_prob") or p.get("bayesian_prob")
-        edge_val = p.get("edge")
-        edge_str = f"{edge_val:+.1%}" if edge_val else "\u2014"
-
-        rows.append({
-            "matchup": f"{p['away_team']} @ {p['home_team']}",
-            "home_sp": p.get("home_sp_name", "TBD"),
-            "away_sp": p.get("away_sp_name", "TBD"),
-            "p_home": f"{best_prob:.1%}" if best_prob else "\u2014",
-            "bayesian": f"{p['bayesian_prob']:.1%}" if p.get("bayesian_prob") else "\u2014",
-            "mc": f"{p['monte_carlo_prob']:.1%}" if p.get("monte_carlo_prob") else "\u2014",
-            "meta": f"{p['meta_prob']:.1%}" if p.get("meta_prob") else "\u2014",
-            "market": f"{p['market_implied_prob']:.1%}" if p.get("market_implied_prob") else "\u2014",
-            "edge": edge_str,
-            "confidence": p.get("confidence", "\u2014") or "\u2014",
-        })
-
-    ui.table(columns=columns, rows=rows, row_key="matchup").classes(
-        "w-full"
-    ).props("flat bordered dense")
-
-    # Bet recommendations
+    # ── Bet recommendations ──────────────────────────────────────────
     if recommendations:
         with ui.row().classes("section-header w-full mt-4"):
             ui.icon("casino").classes("text-green-400")
             ui.label("Bet Recommendations").classes("text-xl font-semibold")
             ui.badge(str(len(recommendations))).props("color=green")
 
-        rec_columns = [
-            {"name": "matchup", "label": "Matchup", "field": "matchup", "align": "left"},
-            {"name": "side", "label": "Side", "field": "side", "align": "center"},
-            {"name": "model_p", "label": "Model P", "field": "model_p", "align": "right"},
-            {"name": "market_p", "label": "Market P", "field": "market_p", "align": "right"},
-            {"name": "edge", "label": "Edge", "field": "edge", "align": "right"},
-            {"name": "ev", "label": "EV", "field": "ev", "align": "right"},
-            {"name": "kelly", "label": "Kelly %", "field": "kelly", "align": "right"},
-            {"name": "bet", "label": "Bet $", "field": "bet", "align": "right"},
-            {"name": "odds", "label": "Odds", "field": "odds", "align": "right"},
-            {"name": "confidence", "label": "Conf.", "field": "confidence", "align": "center"},
-        ]
+        with ui.element("div").classes("w-full").style(
+            "display: grid;"
+            "grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));"
+            "gap: 16px;"
+        ):
+            for r in recommendations:
+                _bet_rec_card(r)
 
-        rec_rows = []
-        for r in recommendations:
-            rec_rows.append({
-                "matchup": f"{r['away_team']} @ {r['home_team']}",
-                "side": r["bet_side"],
-                "model_p": f"{r['model_prob']:.1%}",
-                "market_p": f"{r['market_prob']:.1%}",
-                "edge": f"{r['edge']:+.1%}",
-                "ev": f"{r['expected_value']:+.1%}",
-                "kelly": f"{r['kelly_fraction']:.2%}",
-                "bet": f"${r['bet_amount']:.2f}",
-                "odds": str(r["odds_american"]),
-                "confidence": r["confidence"],
-            })
 
-        ui.table(columns=rec_columns, rows=rec_rows, row_key="matchup").classes(
-            "w-full"
-        ).props("flat bordered dense")
+# ── Components ────────────────────────────────────────────────────────
+
+
+def _game_prediction_card(p: dict) -> None:
+    """Render a single game prediction as a visual card."""
+    away = p["away_team"]
+    home = p["home_team"]
+    away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
+    home_color = TEAM_COLORS.get(home, ("#3b82f6", "#1e293b"))[0]
+    game_pk = p.get("game_pk")
+
+    best_prob = (
+        p.get("meta_prob")
+        or p.get("consensus_prob")
+        or p.get("bayesian_prob")
+        or 0.5
+    )
+    away_pct = (1 - best_prob) * 100
+    home_pct = best_prob * 100
+
+    # Determine favored team
+    home_favored = best_prob > 0.5
+
+    card = ui.card().classes("glow-card px-5 py-4 cursor-pointer")
+    if game_pk:
+        card.on("click", lambda gpk=game_pk: ui.navigate.to(f"/game/{gpk}"))
+
+    with card:
+        # ── Teams row ────────────────────────────────────────
+        with ui.row().classes("items-center justify-between w-full"):
+            with ui.row().classes("items-center gap-2"):
+                ui.html(
+                    f'<span style="width:10px; height:10px; border-radius:50%;'
+                    f' background:{away_color}; display:inline-block;'
+                    f' box-shadow: 0 0 6px {away_color}80;"></span>'
+                )
+                bold = "font-bold" if not home_favored else ""
+                ui.label(away).classes(f"text-base {bold}")
+            ui.label("@").classes("text-gray-600 text-xs")
+            with ui.row().classes("items-center gap-2"):
+                bold = "font-bold" if home_favored else ""
+                ui.label(home).classes(f"text-base {bold}")
+                ui.html(
+                    f'<span style="width:10px; height:10px; border-radius:50%;'
+                    f' background:{home_color}; display:inline-block;'
+                    f' box-shadow: 0 0 6px {home_color}80;"></span>'
+                )
+
+        # ── Starting pitchers ────────────────────────────────
+        away_sp = p.get("away_sp_name", "TBD")
+        home_sp = p.get("home_sp_name", "TBD")
+        with ui.row().classes("justify-between w-full"):
+            ui.label(away_sp).classes("text-[0.7rem] text-gray-500")
+            ui.label("vs").classes("text-[0.6rem] text-gray-600")
+            ui.label(home_sp).classes("text-[0.7rem] text-gray-500")
+
+        ui.separator().classes("my-2 opacity-10")
+
+        # ── Win probability bar ──────────────────────────────
+        ui.html(f'''
+            <div style="display:flex; width:100%; height:6px; border-radius:3px;
+                        overflow:hidden;">
+                <div style="width:{away_pct}%; background:{away_color};
+                            transition: width 0.3s;"></div>
+                <div style="width:{home_pct}%; background:{home_color};
+                            transition: width 0.3s;"></div>
+            </div>
+        ''')
+        with ui.row().classes("justify-between w-full mt-1"):
+            ui.label(f"{1 - best_prob:.0%}").classes("text-[0.65rem] text-gray-500")
+            ui.html(
+                f'<span style="font-size:0.65rem; font-weight:600;'
+                f' color:{"#a5b4fc" if home_favored else "#94a3b8"};">'
+                f'P(Home) {best_prob:.1%}</span>'
+            )
+
+        # ── Model stats row ──────────────────────────────────
+        with ui.row().classes("w-full justify-between mt-3"):
+            for label, key in [
+                ("Bay", "bayesian_prob"),
+                ("MC", "monte_carlo_prob"),
+                ("Meta", "meta_prob"),
+                ("Mkt", "market_implied_prob"),
+            ]:
+                val = p.get(key)
+                val_str = f"{val:.0%}" if val else "\u2014"
+                ui.html(f'''
+                    <div style="display:flex; flex-direction:column;
+                                align-items:center; min-width:40px;">
+                        <span style="font-size:0.55rem; color:#6b7280;
+                                     text-transform:uppercase;
+                                     letter-spacing:0.05em;">{label}</span>
+                        <span style="font-size:0.85rem; font-weight:600;
+                                     color:#e2e8f0;">{val_str}</span>
+                    </div>
+                ''')
+
+        # ── Edge + Confidence ────────────────────────────────
+        edge_val = p.get("edge")
+        conf = p.get("confidence", "\u2014") or "\u2014"
+
+        with ui.row().classes("w-full items-center justify-between mt-2"):
+            if edge_val is not None:
+                edge_color = "#22c55e" if edge_val > 0 else "#ef4444"
+                ui.html(f'''
+                    <div style="display:inline-flex; align-items:center; gap:4px;
+                                padding:2px 10px; border-radius:12px;
+                                background:{edge_color}15;
+                                border:1px solid {edge_color}40;">
+                        <span style="font-size:0.7rem; color:{edge_color};
+                                     font-weight:700;">
+                            Edge {edge_val:+.1%}
+                        </span>
+                    </div>
+                ''')
+            else:
+                ui.html(
+                    '<span style="font-size:0.6rem; color:#4b5563;'
+                    ' padding:2px 8px;">No edge data</span>'
+                )
+
+            if conf != "\u2014":
+                ui.html(f'''
+                    <span style="font-size:0.6rem; color:#6b7280; padding:2px 8px;
+                                 border-radius:8px;
+                                 background:rgba(255,255,255,0.04);">
+                        Conf: {conf}
+                    </span>
+                ''')
+
+
+def _bet_rec_card(r: dict) -> None:
+    """Render a single bet recommendation as a card."""
+    side = r["bet_side"]
+    edge_val = r["edge"]
+    edge_color = "#22c55e" if edge_val > 0 else "#ef4444"
+
+    with ui.card().classes("glow-card px-5 py-4").style(
+        f"border-left: 3px solid {edge_color};"
+    ):
+        with ui.row().classes("items-center justify-between w-full"):
+            ui.label(f"{r['away_team']} @ {r['home_team']}").classes(
+                "font-semibold text-base"
+            )
+            ui.html(f'''
+                <span style="font-size:0.7rem; font-weight:700; color:{edge_color};
+                             padding:2px 10px; border-radius:12px;
+                             background:{edge_color}15;
+                             border:1px solid {edge_color}40;">
+                    {side.upper()}
+                </span>
+            ''')
+
+        with ui.row().classes("w-full gap-4 mt-2 flex-wrap"):
+            for label, value in [
+                ("Model", f"{r['model_prob']:.1%}"),
+                ("Market", f"{r['market_prob']:.1%}"),
+                ("Edge", f"{r['edge']:+.1%}"),
+                ("EV", f"{r['expected_value']:+.1%}"),
+                ("Kelly", f"{r['kelly_fraction']:.2%}"),
+            ]:
+                ui.html(f'''
+                    <div style="display:flex; flex-direction:column; gap:0;">
+                        <span style="font-size:0.55rem; color:#6b7280;
+                                     text-transform:uppercase;
+                                     letter-spacing:0.05em;">{label}</span>
+                        <span style="font-size:0.85rem; font-weight:600;
+                                     color:#e2e8f0;">{value}</span>
+                    </div>
+                ''')
+
+        with ui.row().classes("w-full items-center justify-between mt-2"):
+            ui.html(f'''
+                <span style="font-size:1rem; font-weight:700; color:#22c55e;">
+                    ${r["bet_amount"]:.2f}
+                </span>
+            ''')
+            ui.html(f'''
+                <span style="font-size:0.75rem; color:#94a3b8;">
+                    Odds: {r["odds_american"]}
+                </span>
+            ''')
 
 
 def _metric_card(
