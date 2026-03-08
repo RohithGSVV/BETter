@@ -1,4 +1,4 @@
-"""Today's Games — predictions dashboard with visual game cards."""
+"""Today's Games — matchup strip dashboard with inline probability bars."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ TEAM_COLORS: dict[str, tuple[str, str]] = {
 
 
 def render(svc: PredictionService) -> None:
-    """Render the Today's Games dashboard with visual prediction cards."""
+    """Render the Today's Games dashboard with matchup strips."""
 
     # ── Page header ──────────────────────────────────────────────────
     with ui.row().classes("items-center justify-between w-full"):
@@ -75,46 +75,68 @@ def render(svc: PredictionService) -> None:
     # ── Summary metrics ──────────────────────────────────────────────
     n_games = len(predictions)
     n_bets = len(recommendations)
+    has_odds = bool(settings.odds_api_key)
+    has_market = any(p.get("market_implied_prob") for p in predictions)
     edges = [p["edge"] for p in predictions if p.get("edge") is not None]
     avg_edge = sum(edges) / len(edges) if edges else 0
-    has_odds = bool(settings.odds_api_key)
 
     with ui.row().classes("w-full gap-4 flex-wrap"):
         _metric_card(
             "Games Today", str(n_games), "sports_baseball", "blue",
             on_click=lambda: ui.navigate.to("/live"), subtitle="View Live",
         )
-        if has_odds:
-            _metric_card("Bets Recommended", str(n_bets), "casino", "green")
-        else:
+
+        # Bets Recommended — contextual messaging
+        if not has_odds:
             _metric_card(
                 "Bets Recommended", "---", "casino", "green",
                 subtitle="No Odds API Key",
             )
-        if has_odds and edges:
+        elif not has_market:
+            _metric_card(
+                "Bets Recommended", "---", "casino", "green",
+                subtitle="No market odds",
+            )
+        else:
+            _metric_card("Bets Recommended", str(n_bets), "casino", "green")
+
+        # Avg Edge
+        if has_market and edges:
             _metric_card("Avg Edge", f"{avg_edge:+.1%}", "trending_up", "amber")
+        elif not has_odds:
+            _metric_card(
+                "Avg Edge", "---", "trending_up", "amber",
+                subtitle="No Odds API Key",
+            )
+        elif not has_market:
+            _metric_card(
+                "Avg Edge", "---", "trending_up", "amber",
+                subtitle="No market odds",
+            )
         else:
             _metric_card(
                 "Avg Edge", "---", "trending_up", "amber",
-                subtitle="Needs Odds API" if not has_odds else "No edges",
+                subtitle="No edges",
             )
+
         if recommendations:
             total_bet = sum(r["bet_amount"] for r in recommendations)
             _metric_card("Total Wagered", f"${total_bet:.0f}", "payments", "purple")
 
-    # ── Game prediction cards ────────────────────────────────────────
+    # ── Matchup strips ───────────────────────────────────────────────
     with ui.row().classes("section-header w-full mt-2"):
         ui.icon("list_alt").classes("text-blue-400")
         ui.label("Predictions").classes("text-xl font-semibold")
         ui.badge(str(n_games)).props("color=primary outline")
 
-    with ui.element("div").classes("w-full").style(
-        "display: grid;"
-        "grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));"
-        "gap: 16px;"
-    ):
-        for p in predictions:
-            _game_prediction_card(p)
+    with ui.card().classes("glow-card w-full px-0 py-0 overflow-hidden"):
+        for i, p in enumerate(predictions):
+            if i > 0:
+                ui.html(
+                    '<div style="height:1px; background:rgba(255,255,255,0.04);'
+                    ' margin:0 16px;"></div>'
+                )
+            _game_strip(p)
 
     # ── Bet recommendations ──────────────────────────────────────────
     if recommendations:
@@ -123,20 +145,22 @@ def render(svc: PredictionService) -> None:
             ui.label("Bet Recommendations").classes("text-xl font-semibold")
             ui.badge(str(len(recommendations))).props("color=green")
 
-        with ui.element("div").classes("w-full").style(
-            "display: grid;"
-            "grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));"
-            "gap: 16px;"
-        ):
-            for r in recommendations:
-                _bet_rec_card(r)
+        with ui.card().classes("glow-card w-full px-0 py-0 overflow-hidden"):
+            for i, r in enumerate(recommendations):
+                if i > 0:
+                    ui.html(
+                        '<div style="height:1px;'
+                        ' background:rgba(255,255,255,0.04);'
+                        ' margin:0 16px;"></div>'
+                    )
+                _bet_strip(r)
 
 
 # ── Components ────────────────────────────────────────────────────────
 
 
-def _game_prediction_card(p: dict) -> None:
-    """Render a single game prediction as a visual card."""
+def _game_strip(p: dict) -> None:
+    """Render a single game as a horizontal matchup strip."""
     away = p["away_team"]
     home = p["home_team"]
     away_color = TEAM_COLORS.get(away, ("#3b82f6", "#1e293b"))[0]
@@ -151,169 +175,182 @@ def _game_prediction_card(p: dict) -> None:
     )
     away_pct = (1 - best_prob) * 100
     home_pct = best_prob * 100
-
-    # Determine favored team
     home_favored = best_prob > 0.5
+    favored_color = home_color if home_favored else away_color
 
-    card = ui.card().classes("glow-card px-5 py-4 cursor-pointer")
-    if game_pk:
-        card.on("click", lambda gpk=game_pk: ui.navigate.to(f"/game/{gpk}"))
+    away_sp = p.get("away_sp_name") or "TBD"
+    home_sp = p.get("home_sp_name") or "TBD"
 
-    with card:
-        # ── Teams row ────────────────────────────────────────
-        with ui.row().classes("items-center justify-between w-full"):
-            with ui.row().classes("items-center gap-2"):
-                ui.html(
-                    f'<span style="width:10px; height:10px; border-radius:50%;'
-                    f' background:{away_color}; display:inline-block;'
-                    f' box-shadow: 0 0 6px {away_color}80;"></span>'
-                )
-                bold = "font-bold" if not home_favored else ""
-                ui.label(away).classes(f"text-base {bold}")
-            ui.label("@").classes("text-gray-600 text-xs")
-            with ui.row().classes("items-center gap-2"):
-                bold = "font-bold" if home_favored else ""
-                ui.label(home).classes(f"text-base {bold}")
-                ui.html(
-                    f'<span style="width:10px; height:10px; border-radius:50%;'
-                    f' background:{home_color}; display:inline-block;'
-                    f' box-shadow: 0 0 6px {home_color}80;"></span>'
-                )
+    # Model values
+    models = []
+    for label, key in [
+        ("Bay", "bayesian_prob"),
+        ("MC", "monte_carlo_prob"),
+        ("Meta", "meta_prob"),
+        ("Mkt", "market_implied_prob"),
+    ]:
+        val = p.get(key)
+        models.append(f"{label} {val:.0%}" if val else f"{label} \u2014")
+    models_text = " &middot; ".join(models)
 
-        # ── Starting pitchers ────────────────────────────────
-        away_sp = p.get("away_sp_name", "TBD")
-        home_sp = p.get("home_sp_name", "TBD")
-        with ui.row().classes("justify-between w-full"):
-            ui.label(away_sp).classes("text-[0.7rem] text-gray-500")
-            ui.label("vs").classes("text-[0.6rem] text-gray-600")
-            ui.label(home_sp).classes("text-[0.7rem] text-gray-500")
+    # Edge
+    edge_val = p.get("edge")
+    if edge_val is not None:
+        ec = "#22c55e" if edge_val > 0 else "#ef4444"
+        edge_html = (
+            f'<span style="font-size:0.65rem; font-weight:700; color:{ec};'
+            f" padding:1px 8px; border-radius:10px;"
+            f" background:{ec}12; border:1px solid {ec}35;"
+            f'">Edge {edge_val:+.1%}</span>'
+        )
+    else:
+        edge_html = (
+            '<span style="font-size:0.6rem; color:#4b5563;">No edge</span>'
+        )
 
-        ui.separator().classes("my-2 opacity-10")
+    # Favored team styling
+    away_weight = "700" if not home_favored else "400"
+    home_weight = "700" if home_favored else "400"
+    away_name_color = "#e2e8f0" if not home_favored else "#94a3b8"
+    home_name_color = "#e2e8f0" if home_favored else "#94a3b8"
 
-        # ── Win probability bar ──────────────────────────────
-        ui.html(f'''
-            <div style="display:flex; width:100%; height:6px; border-radius:3px;
-                        overflow:hidden;">
-                <div style="width:{away_pct}%; background:{away_color};
-                            transition: width 0.3s;"></div>
-                <div style="width:{home_pct}%; background:{home_color};
-                            transition: width 0.3s;"></div>
+    strip_html = f'''
+    <div style="display:flex; flex-direction:column; gap:5px;
+                padding:14px 20px; cursor:pointer;
+                border-left:3px solid {favored_color};
+                transition: background 0.15s ease;"
+         onmouseenter="this.style.background='rgba(59,130,246,0.04)'"
+         onmouseleave="this.style.background='transparent'">
+
+        <!-- Row 1: Teams + probability bar -->
+        <div style="display:flex; align-items:center; gap:10px; width:100%;">
+            <div style="display:flex; align-items:center; gap:6px;
+                        min-width:90px;">
+                <span style="width:10px; height:10px; border-radius:50%;
+                             background:{away_color}; display:inline-block;
+                             box-shadow:0 0 5px {away_color}70;
+                             flex-shrink:0;"></span>
+                <span style="font-size:0.95rem; font-weight:{away_weight};
+                             color:{away_name_color};">{away}</span>
             </div>
-        ''')
-        with ui.row().classes("justify-between w-full mt-1"):
-            ui.label(f"{1 - best_prob:.0%}").classes("text-[0.65rem] text-gray-500")
-            ui.html(
-                f'<span style="font-size:0.65rem; font-weight:600;'
-                f' color:{"#a5b4fc" if home_favored else "#94a3b8"};">'
-                f'P(Home) {best_prob:.1%}</span>'
-            )
 
-        # ── Model stats row ──────────────────────────────────
-        with ui.row().classes("w-full justify-between mt-3"):
-            for label, key in [
-                ("Bay", "bayesian_prob"),
-                ("MC", "monte_carlo_prob"),
-                ("Meta", "meta_prob"),
-                ("Mkt", "market_implied_prob"),
-            ]:
-                val = p.get(key)
-                val_str = f"{val:.0%}" if val else "\u2014"
-                ui.html(f'''
-                    <div style="display:flex; flex-direction:column;
-                                align-items:center; min-width:40px;">
-                        <span style="font-size:0.55rem; color:#6b7280;
-                                     text-transform:uppercase;
-                                     letter-spacing:0.05em;">{label}</span>
-                        <span style="font-size:0.85rem; font-weight:600;
-                                     color:#e2e8f0;">{val_str}</span>
-                    </div>
-                ''')
+            <span style="font-size:0.8rem; color:#94a3b8; min-width:32px;
+                         text-align:right; font-weight:500;">
+                {1 - best_prob:.0%}
+            </span>
 
-        # ── Edge + Confidence ────────────────────────────────
-        edge_val = p.get("edge")
-        conf = p.get("confidence", "\u2014") or "\u2014"
+            <div style="flex:1; display:flex; height:8px; border-radius:4px;
+                        overflow:hidden; min-width:80px;">
+                <div style="width:{away_pct}%; background:{away_color};
+                            transition:width 0.3s;"></div>
+                <div style="width:{home_pct}%; background:{home_color};
+                            transition:width 0.3s;"></div>
+            </div>
 
-        with ui.row().classes("w-full items-center justify-between mt-2"):
-            if edge_val is not None:
-                edge_color = "#22c55e" if edge_val > 0 else "#ef4444"
-                ui.html(f'''
-                    <div style="display:inline-flex; align-items:center; gap:4px;
-                                padding:2px 10px; border-radius:12px;
-                                background:{edge_color}15;
-                                border:1px solid {edge_color}40;">
-                        <span style="font-size:0.7rem; color:{edge_color};
-                                     font-weight:700;">
-                            Edge {edge_val:+.1%}
-                        </span>
-                    </div>
-                ''')
-            else:
-                ui.html(
-                    '<span style="font-size:0.6rem; color:#4b5563;'
-                    ' padding:2px 8px;">No edge data</span>'
-                )
+            <span style="font-size:0.8rem; color:#94a3b8; min-width:32px;
+                         text-align:left; font-weight:500;">
+                {best_prob:.0%}
+            </span>
 
-            if conf != "\u2014":
-                ui.html(f'''
-                    <span style="font-size:0.6rem; color:#6b7280; padding:2px 8px;
-                                 border-radius:8px;
-                                 background:rgba(255,255,255,0.04);">
-                        Conf: {conf}
-                    </span>
-                ''')
+            <div style="display:flex; align-items:center; gap:6px;
+                        min-width:90px; justify-content:flex-end;">
+                <span style="font-size:0.95rem; font-weight:{home_weight};
+                             color:{home_name_color};">{home}</span>
+                <span style="width:10px; height:10px; border-radius:50%;
+                             background:{home_color}; display:inline-block;
+                             box-shadow:0 0 5px {home_color}70;
+                             flex-shrink:0;"></span>
+            </div>
+        </div>
+
+        <!-- Row 2: Pitchers -->
+        <div style="display:flex; align-items:center;
+                    justify-content:space-between; padding:0 2px;">
+            <span style="font-size:0.7rem; color:#6b7280;
+                         min-width:90px;">{away_sp}</span>
+            <span style="font-size:0.55rem; color:#4b5563;
+                         letter-spacing:0.1em;">VS</span>
+            <span style="font-size:0.7rem; color:#6b7280;
+                         min-width:90px;
+                         text-align:right;">{home_sp}</span>
+        </div>
+
+        <!-- Row 3: Model values + Edge -->
+        <div style="display:flex; align-items:center;
+                    justify-content:space-between; padding:0 2px;">
+            <span style="font-size:0.6rem; color:#6b7280;
+                         letter-spacing:0.02em;">{models_text}</span>
+            {edge_html}
+        </div>
+    </div>
+    '''
+
+    strip = ui.html(strip_html)
+    if game_pk:
+        strip.on(
+            "click",
+            lambda gpk=game_pk: ui.navigate.to(f"/game/{gpk}"),
+        )
 
 
-def _bet_rec_card(r: dict) -> None:
-    """Render a single bet recommendation as a card."""
-    side = r["bet_side"]
+def _bet_strip(r: dict) -> None:
+    """Render a single bet recommendation as a horizontal strip."""
     edge_val = r["edge"]
-    edge_color = "#22c55e" if edge_val > 0 else "#ef4444"
+    ec = "#22c55e" if edge_val > 0 else "#ef4444"
+    side = r["bet_side"].upper()
 
-    with ui.card().classes("glow-card px-5 py-4").style(
-        f"border-left: 3px solid {edge_color};"
-    ):
-        with ui.row().classes("items-center justify-between w-full"):
-            ui.label(f"{r['away_team']} @ {r['home_team']}").classes(
-                "font-semibold text-base"
-            )
-            ui.html(f'''
-                <span style="font-size:0.7rem; font-weight:700; color:{edge_color};
-                             padding:2px 10px; border-radius:12px;
-                             background:{edge_color}15;
-                             border:1px solid {edge_color}40;">
-                    {side.upper()}
-                </span>
-            ''')
-
-        with ui.row().classes("w-full gap-4 mt-2 flex-wrap"):
-            for label, value in [
-                ("Model", f"{r['model_prob']:.1%}"),
-                ("Market", f"{r['market_prob']:.1%}"),
-                ("Edge", f"{r['edge']:+.1%}"),
-                ("EV", f"{r['expected_value']:+.1%}"),
-                ("Kelly", f"{r['kelly_fraction']:.2%}"),
-            ]:
-                ui.html(f'''
-                    <div style="display:flex; flex-direction:column; gap:0;">
-                        <span style="font-size:0.55rem; color:#6b7280;
-                                     text-transform:uppercase;
-                                     letter-spacing:0.05em;">{label}</span>
-                        <span style="font-size:0.85rem; font-weight:600;
-                                     color:#e2e8f0;">{value}</span>
-                    </div>
-                ''')
-
-        with ui.row().classes("w-full items-center justify-between mt-2"):
-            ui.html(f'''
-                <span style="font-size:1rem; font-weight:700; color:#22c55e;">
-                    ${r["bet_amount"]:.2f}
-                </span>
-            ''')
-            ui.html(f'''
-                <span style="font-size:0.75rem; color:#94a3b8;">
-                    Odds: {r["odds_american"]}
-                </span>
-            ''')
+    strip_html = f'''
+    <div style="display:flex; align-items:center; gap:16px;
+                padding:12px 20px; border-left:3px solid {ec};">
+        <div style="display:flex; flex-direction:column; gap:0;
+                    min-width:120px;">
+            <span style="font-size:0.9rem; font-weight:600;
+                         color:#e2e8f0;">
+                {r["away_team"]} @ {r["home_team"]}
+            </span>
+            <span style="font-size:0.65rem; color:{ec};
+                         font-weight:700;">{side}</span>
+        </div>
+        <div style="display:flex; gap:16px; flex:1; flex-wrap:wrap;">
+            <div style="display:flex; flex-direction:column; gap:0;">
+                <span style="font-size:0.5rem; color:#6b7280;
+                             text-transform:uppercase;
+                             letter-spacing:0.05em;">Model</span>
+                <span style="font-size:0.8rem; font-weight:600;
+                             color:#e2e8f0;">{r["model_prob"]:.1%}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:0;">
+                <span style="font-size:0.5rem; color:#6b7280;
+                             text-transform:uppercase;
+                             letter-spacing:0.05em;">Market</span>
+                <span style="font-size:0.8rem; font-weight:600;
+                             color:#e2e8f0;">{r["market_prob"]:.1%}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:0;">
+                <span style="font-size:0.5rem; color:#6b7280;
+                             text-transform:uppercase;
+                             letter-spacing:0.05em;">Edge</span>
+                <span style="font-size:0.8rem; font-weight:700;
+                             color:{ec};">{r["edge"]:+.1%}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:0;">
+                <span style="font-size:0.5rem; color:#6b7280;
+                             text-transform:uppercase;
+                             letter-spacing:0.05em;">Kelly</span>
+                <span style="font-size:0.8rem; font-weight:600;
+                             color:#e2e8f0;">{r["kelly_fraction"]:.2%}</span>
+            </div>
+        </div>
+        <div style="display:flex; flex-direction:column;
+                    align-items:flex-end; gap:0;">
+            <span style="font-size:1.1rem; font-weight:700;
+                         color:#22c55e;">${r["bet_amount"]:.2f}</span>
+            <span style="font-size:0.65rem;
+                         color:#6b7280;">Odds: {r["odds_american"]}</span>
+        </div>
+    </div>
+    '''
+    ui.html(strip_html)
 
 
 def _metric_card(
